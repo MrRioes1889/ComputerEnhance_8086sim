@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/bin/Debug/8086sim.exe",
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "CMake: build",
-      "externalConsole": true
+      "console": "externalTerminal"
     }
   ]
 }
