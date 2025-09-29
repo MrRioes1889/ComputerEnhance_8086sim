@@ -1,0 +1,4 @@
+bin/
+build/
+asm/
+*.asm
