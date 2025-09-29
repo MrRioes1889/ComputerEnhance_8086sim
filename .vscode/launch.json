@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch with MSVC debugger",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bin/Debug/8086sim.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "CMake: build",
+      "externalConsole": true
+    }
+  ]
+}

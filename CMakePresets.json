@@ -1,0 +1,35 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "Visual Studio",
+            "hidden": false,
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${workspaceFolder}/build",
+            "cacheVariables": {}
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Debug",
+            "description": "Debug without optimizations",
+            "displayName": "Debug",
+            "configuration": "Debug",
+            "configurePreset": "Visual Studio"
+        },
+        {
+            "name": "ODebug",
+            "description": "Debug with optimizations",
+            "displayName": "ODebug",
+            "configuration": "ODebug",
+            "configurePreset": "Visual Studio"
+        },
+        {
+            "name": "Release",
+            "description": "Release with optimizations",
+            "displayName": "Release",
+            "configuration": "Release",
+            "configurePreset": "Visual Studio"
+        }
+    ]
+}
