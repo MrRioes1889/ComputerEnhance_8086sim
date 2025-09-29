@@ -22,33 +22,9 @@ FileBuffer;
 typedef int32 (*FP_parse_instruction)(FileBuffer buffer, uint32 read_offset);
 static FP_parse_instruction primary_instruction_lookup[256] = {0};
 
-#if 0
-static const char* register_name_lookup[16] = 
+// 8-bit, 16-bit register pairs
+static char register_name_lookup[8][2][3] = 
 {
-	// 8-bit registers
-	[0b0000] = "al",
-	[0b0001] = "cl",
-	[0b0010] = "dl",
-	[0b0011] = "bl",
-	[0b0100] = "ah",
-	[0b0101] = "ch",
-	[0b0110] = "dh",
-	[0b0111] = "bh",
-
-	// 16-bit registers
-	[0b1000] = "ax",
-	[0b1001] = "cx",
-	[0b1010] = "dx",
-	[0b1011] = "bx",
-	[0b1100] = "sp",
-	[0b1101] = "bp",
-	[0b1110] = "si",
-	[0b1111] = "di",
-};
-#else
-static char register_name_lookup[][2][3] = 
-{
-	// 8-bit and 16-bit registers
 	[0b000] = {"al","ax"},
 	[0b001] = {"cl","cx"},
 	[0b010] = {"dl","dx"},
@@ -58,7 +34,6 @@ static char register_name_lookup[][2][3] =
 	[0b110] = {"dh","si"},
 	[0b111] = {"bh","di"},
 };
-#endif
 
 static void _fill_instruction_lookups();
 
