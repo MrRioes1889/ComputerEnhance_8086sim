@@ -22,7 +22,8 @@ FileBuffer;
 typedef int32 (*FP_parse_instruction)(FileBuffer buffer, uint32 read_offset);
 static FP_parse_instruction primary_instruction_lookup[256] = {0};
 
-static const char* register_name_lookup[0b10000] = 
+#if 0
+static const char* register_name_lookup[16] = 
 {
 	// 8-bit registers
 	[0b0000] = "al",
@@ -44,6 +45,20 @@ static const char* register_name_lookup[0b10000] =
 	[0b1110] = "si",
 	[0b1111] = "di",
 };
+#else
+static char register_name_lookup[][2][3] = 
+{
+	// 8-bit and 16-bit registers
+	[0b000] = {"al","ax"},
+	[0b001] = {"cl","cx"},
+	[0b010] = {"dl","dx"},
+	[0b011] = {"bl","bx"},
+	[0b100] = {"ah","sp"},
+	[0b101] = {"ch","bp"},
+	[0b110] = {"dh","si"},
+	[0b111] = {"bh","di"},
+};
+#endif
 
 static void _fill_instruction_lookups();
 
@@ -137,7 +152,7 @@ static int32 _inst_mov_mem_reg_transfer(FileBuffer buffer, uint32 in_read_offset
 	Byte displacements_bytes[2] = {0};
 
 	bool8 d = (byte1 >> 1) & 1;
-	bool8 w_register_mask = (byte1 << 3) & 0b1000;
+	bool8 w = byte1 & 1;
 
 	uint8 mode_field = byte2 >> 6;
 	uint8 reg_field = (byte2 >> 3) & 0b111;
@@ -145,11 +160,11 @@ static int32 _inst_mov_mem_reg_transfer(FileBuffer buffer, uint32 in_read_offset
 	// Register Mode
 	if (mode_field == 0b11)
 	{
-		uint8 source_reg_id = w_register_mask + (reg_field * (!d)) + (rm_field * d);
-		uint8 dest_reg_id = w_register_mask + (reg_field * d) + (rm_field * (!d));
+		uint8 source_reg_id = (reg_field * (!d)) + (rm_field * d);
+		uint8 dest_reg_id = (reg_field * d) + (rm_field * (!d));
 
-		printf_s("mov %s, %s\n", register_name_lookup[dest_reg_id], register_name_lookup[source_reg_id]);
-		fprintf_s(out_asm_file, "mov %s, %s\n", register_name_lookup[dest_reg_id], register_name_lookup[source_reg_id]);
+		printf_s("mov %s, %s\n", register_name_lookup[dest_reg_id][w], register_name_lookup[source_reg_id][w]);
+		fprintf_s(out_asm_file, "mov %s, %s\n", register_name_lookup[dest_reg_id][w], register_name_lookup[source_reg_id][w]);
 	}
 	else
 	{
