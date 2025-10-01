@@ -8,7 +8,7 @@ project(${APP_NAME} C)
 set(CMAKE_CONFIGURATION_TYPES Debug Release ODebug)
 set(CMAKE_C_STANDARD 17)
 
-if(NOT CMAKE_GENERATOR MATCHES "Visual Studio")
+if(NOT MSVC)
     set(CMAKE_C_FLAGS_DEBUG "-g -O0")
     set(CMAKE_C_FLAGS_ODEBUG "-g -O3")
     set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
@@ -42,6 +42,14 @@ set_target_properties(
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
     OUTPUT_NAME "${APP_NAME}"
 )
+
+if (MSVC)
+    target_compile_options(${APP_NAME} PRIVATE /W4 /WX /wd4100)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(${APP_NAME} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 
 target_include_directories(
     ${APP_NAME}
