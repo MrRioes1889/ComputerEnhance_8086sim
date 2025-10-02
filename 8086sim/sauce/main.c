@@ -2,7 +2,9 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <malloc.h>
+#include <math.h>
 
+typedef int8_t int8;
 typedef int16_t int16;
 typedef int32_t int32;
 typedef uint8_t bool8;
@@ -37,7 +39,20 @@ static char register_name_lookup[8][2][3] =
 	[0b111] = {"bh","di"},
 };
 
-static void _print_out(FILE* out_file, const char* format, ...);
+static const char* mem_mode_rm_field_reg_lookup[] =
+{
+	[0b000] = "bx + si",
+	[0b001] = "bx + di",
+	[0b010] = "bp + si",
+	[0b011] = "bp + di",
+	[0b100] = "si",
+	[0b101] = "di",
+	[0b110] = "bp",
+	[0b111] = "bx",
+};
+
+
+static void _print_out(const char* format, ...);
 static void _fill_instruction_lookups();
 static int32 _parse_instruction(Byte* data, uint32 remaining_size);
 
@@ -47,7 +62,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0039_more_movs";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0040_challenge_movs";
 	else
 		bin_filepath = argv[1];
 
@@ -74,8 +89,8 @@ int main(int argc, char** argv)
 	if(!out_asm_file)
 	{
 		perror("Error");
-		printf_s("Failed to oprn file for appending %s", out_asm_filepath);
-		return 2;
+		printf_s("Failed to open file for appending %s", out_asm_filepath);
+		return 3;
 	}
 
 	FileBuffer read_buf = {0};
@@ -94,7 +109,7 @@ int main(int argc, char** argv)
 		int32 bytes_read = _parse_instruction(&read_buf.data[read_offset], read_buf.size - read_buf.size);
 		if (bytes_read < 0)
 		{
-			_print_out(out_asm_file, "Error: failed to read next instruction at offset %u.\n", read_offset);
+			_print_out("Error: failed to read next instruction at offset %u.\n", read_offset);
 			break;
 		}
 
@@ -107,7 +122,7 @@ int main(int argc, char** argv)
 	return 0;
 }
 
-static void _print_out(FILE* out_file, const char* format, ...)
+static void _print_out(const char* format, ...)
 {
 	char line_buf[64];
 	va_list args;
@@ -116,7 +131,7 @@ static void _print_out(FILE* out_file, const char* format, ...)
 	va_end(args);
 
 	printf_s(line_buf);
-	fprintf_s(out_file, line_buf);
+	fprintf_s(out_asm_file, line_buf);
 }
 
 static int32 _parse_instruction(Byte* data, uint32 remaining_size)
@@ -131,20 +146,9 @@ static int32 _parse_instruction(Byte* data, uint32 remaining_size)
 // 0b10001d(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
 static int32 _inst_mov_mem_reg_transfer(Byte* data, uint32 remaining_size)
 {
-	static const char* mem_mode_lookup[] =
-	{
-		[0b000] = "bx + si",
-		[0b001] = "bx + di",
-		[0b010] = "bp + si",
-		[0b011] = "bp + di",
-		[0b100] = "si",
-		[0b101] = "di",
-		[0b110] = "bp",
-		[0b111] = "bx",
-	};
-
 	Byte byte1 = data[0];
 	Byte byte2 = data[1];
+	uint32 bytes_read = 2;
 
 	bool8 d = (byte1 >> 1) & 1;
 	bool8 w = byte1 & 1;
@@ -153,61 +157,128 @@ static int32 _inst_mov_mem_reg_transfer(Byte* data, uint32 remaining_size)
 	uint8 reg_field = (byte2 >> 3) & 0b111;
 	uint8 rm_field = byte2 & 0b111;
 
+	const char* reg_s = register_name_lookup[reg_field][w];
+	char rm_s[32];
+
 	// Register Mode
 	if (mod_field == 0b11)
 	{
-		uint8 source_reg_id = (reg_field * (!d)) + (rm_field * d);
-		uint8 dest_reg_id = (reg_field * d) + (rm_field * (!d));
-
-		_print_out(out_asm_file, "mov %s, %s\n", register_name_lookup[dest_reg_id][w], register_name_lookup[source_reg_id][w]);
-		return 2;
+		sprintf_s(rm_s, sizeof(rm_s), "%s", register_name_lookup[rm_field][w]);
 	}
 	// Direct Address Mem Mode
 	else if ((!mod_field) * (rm_field == 0b110))
 	{
-		if (d)
-			_print_out(out_asm_file, "mov %s, [%hu]\n", register_name_lookup[reg_field][w], *((Word*)&data[2]));
-		else
-			_print_out(out_asm_file, "mov [%hu], %s\n", *((Word*)&data[2]), register_name_lookup[reg_field][w]);
-
-		return 4;
+		sprintf_s(rm_s, sizeof(rm_s), "[%hu]", *((Word*)&data[bytes_read]));
+		bytes_read += 2;
 	}
 	// Mem Mode w/o Displacement
 	else if (!mod_field)
 	{
-		if (d)
-			_print_out(out_asm_file, "mov %s, [%s]\n", register_name_lookup[reg_field][w], mem_mode_lookup[rm_field]);
-		else
-			_print_out(out_asm_file, "mov [%s], %s\n", mem_mode_lookup[rm_field], register_name_lookup[reg_field][w]);
-
-		return 2;
+		sprintf_s(rm_s, sizeof(rm_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
 	}
 	// Mem Mode with Displacement
 	else
 	{
-		int16 displacement_value;
+		int32 displacement_value;
 		if (mod_field == 0b01)
-			displacement_value = (int16)data[2];
+			displacement_value = (int8)data[bytes_read];
 		else
-			displacement_value = *((int16*)&data[2]);
+			displacement_value = *((int16*)&data[bytes_read]);
+
+		bytes_read += mod_field;
 
 		if (displacement_value)
 		{
-			if (d)
-				_print_out(out_asm_file, "mov %s, [%s + %hi]\n", register_name_lookup[reg_field][w], mem_mode_lookup[rm_field], displacement_value);
-			else
-				_print_out(out_asm_file, "mov [%s + %hi], %s\n", mem_mode_lookup[rm_field], displacement_value, register_name_lookup[reg_field][w]);
+			const char* signs[2] = {"+", "-"};
+			const char* sign = signs[displacement_value < 0];
+
+			sprintf_s(rm_s, sizeof(rm_s), "[%s %s %i]", mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
 		}
 		else
 		{
-			if (d)
-				_print_out(out_asm_file, "mov %s, [%s]\n", register_name_lookup[reg_field][w], mem_mode_lookup[rm_field]);
-			else
-				_print_out(out_asm_file, "mov [%s], %s\n", mem_mode_lookup[rm_field], register_name_lookup[reg_field][w]);
+			sprintf_s(rm_s, sizeof(rm_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
 		}
-
-		return 2 + mod_field;
 	}
+
+	if (d)
+		_print_out("mov %s, %s\n", reg_s, rm_s);
+	else
+		_print_out("mov %s, %s\n", rm_s, reg_s);
+
+	return bytes_read;
+}
+
+// 0b1100011w(1) mod(2)000r/m(3) {disp-low} {disp-high} data-low {data-high}
+static int32 _inst_mov_imm_to_mem_reg(Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+	Byte byte2 = data[1];
+	uint32 bytes_read = 2;
+
+	bool8 w = byte1 & 1;
+
+	uint8 mod_field = byte2 >> 6;
+	uint8 rm_field = byte2 & 0b111;
+
+	char src_s[32];
+	char dest_s[32];
+
+	// Register Mode
+	if (mod_field == 0b11)
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "%s", register_name_lookup[rm_field][w]);
+	}
+	// Direct Address Mem Mode
+	else if ((!mod_field) * (rm_field == 0b110))
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "[%hu]", *((Word*)&data[bytes_read]));
+		bytes_read += 2;
+	}
+	// Mem Mode w/o Displacement
+	else if (!mod_field)
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
+	}
+	// Mem Mode with Displacement
+	else
+	{
+		int32 displacement_value;
+		if (mod_field == 0b01)
+			displacement_value = (int8)data[bytes_read];
+		else
+			displacement_value = *((int16*)&data[bytes_read]);
+
+		bytes_read += mod_field;
+
+		if (displacement_value)
+		{
+			const char* signs[2] = {"+", "-"};
+			const char* sign = signs[displacement_value < 0];
+
+			sprintf_s(dest_s, sizeof(dest_s), "[%s %s %i]", mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
+		}
+		else
+		{
+			sprintf_s(dest_s, sizeof(dest_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
+		}
+	}
+
+	if(w)
+	{
+		Word imm = *((Word*)&data[bytes_read]);
+		bytes_read += 2;
+		sprintf_s(src_s, sizeof(src_s), "word %hu", imm);
+	}
+	else
+	{
+		Byte imm = data[bytes_read];
+		bytes_read += 1;
+		sprintf_s(src_s, sizeof(src_s), "byte %hhu", imm);
+	}
+
+	_print_out("mov %s, %s\n", dest_s, src_s);
+
+	return bytes_read;
 }
 
 // 0b1011w(1)reg(3) data-low {data-high}
@@ -221,19 +292,64 @@ static int32 _inst_mov_imm_to_reg(Byte* data, uint32 remaining_size)
 	if (w)
 	{
 		Word imm = *((Word*)&data[1]);
-		_print_out(out_asm_file, "mov %s, %hu\n", register_name_lookup[reg_field][w], imm);
+		_print_out("mov %s, %hu\n", register_name_lookup[reg_field][w], imm);
 		return 3;
 	}
 	else
 	{
 		Byte imm = data[1];
-		_print_out(out_asm_file, "mov %s, %hhu\n", register_name_lookup[reg_field][w], imm);
+		_print_out("mov %s, %hhu\n", register_name_lookup[reg_field][w], imm);
 		return 2;
 	}
+}
+
+// 0b1010000w(1) addr-low addr-high
+static int32 _inst_mov_mem_to_acc(Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+
+	bool8 w = byte1 & 1;
+	
+	if (w)
+	{
+		Word imm = *((Word*)&data[1]);
+		_print_out("mov ax, [%hu]\n", imm);
+	}
+	else
+	{
+		Byte imm = data[1];
+		_print_out("mov al, [%hhu]\n", imm);
+	}
+
+	return 3;
+}
+
+// 0b1010001w(1) addr-low addr-high
+static int32 _inst_mov_acc_to_mem(Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+
+	bool8 w = byte1 & 1;
+	
+	if (w)
+	{
+		Word imm = *((Word*)&data[1]);
+		_print_out("mov [%hu], ax\n", imm);
+	}
+	else
+	{
+		Byte imm = data[1];
+		_print_out("mov [%hhu], al\n", imm);
+	}
+
+	return 3;
 }
 
 static void _fill_instruction_lookups()
 {
 	for (uint32 i = 0b10001000; i <= 0b10001011; i++) primary_instruction_lookup[i] = _inst_mov_mem_reg_transfer;
+	for (uint32 i = 0b11000110; i <= 0b11000111; i++) primary_instruction_lookup[i] = _inst_mov_imm_to_mem_reg;
 	for (uint32 i = 0b10110000; i <= 0b10111111; i++) primary_instruction_lookup[i] = _inst_mov_imm_to_reg;
+	for (uint32 i = 0b10100000; i <= 0b10100001; i++) primary_instruction_lookup[i] = _inst_mov_mem_to_acc;
+	for (uint32 i = 0b10100010; i <= 0b10100011; i++) primary_instruction_lookup[i] = _inst_mov_acc_to_mem;
 }
