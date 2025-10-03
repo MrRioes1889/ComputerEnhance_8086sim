@@ -7,7 +7,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/bin/Debug/8086sim.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "CMake: build",
+      "preLaunchTask": "CMake: Configure and Build",
       "console": "externalTerminal"
     }
   ]

@@ -1,0 +1,453 @@
+#include "decoder.h"
+#include "common.h"
+#include <stdio.h>
+#include <math.h>
+
+typedef int32 (*FP_parse_instruction)(Byte* data, uint32 remaining_size);
+static FP_parse_instruction primary_instruction_lookup[256] = {0};
+
+// 8-bit, 16-bit register pairs
+static char register_name_lookup[8][2][3] = 
+{
+	[0b000] = {"al","ax"},
+	[0b001] = {"cl","cx"},
+	[0b010] = {"dl","dx"},
+	[0b011] = {"bl","bx"},
+	[0b100] = {"ah","sp"},
+	[0b101] = {"ch","bp"},
+	[0b110] = {"dh","si"},
+	[0b111] = {"bh","di"},
+};
+
+static const char* mem_mode_rm_field_reg_lookup[] =
+{
+	[0b000] = "bx + si",
+	[0b001] = "bx + di",
+	[0b010] = "bp + si",
+	[0b011] = "bp + di",
+	[0b100] = "si",
+	[0b101] = "di",
+	[0b110] = "bp",
+	[0b111] = "bx",
+};
+
+static char arithm_op_lookup[8][4] =
+{
+	[0b000] = "add",
+	[0b001] = "or",
+	[0b010] = "adc",
+	[0b011] = "sbb",
+	[0b100] = "and",
+	[0b101] = "sub",
+	[0b110] = "xor",
+	[0b111] = "cmp",
+};
+
+// 0bxxxxxxd(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
+static int32 _inst_decode_mem_reg_transfer(const char* op, Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+	Byte byte2 = data[1];
+	uint32 bytes_read = 2;
+
+	bool8 d = (byte1 >> 1) & 1;
+	bool8 w = byte1 & 1;
+
+	uint8 mod_field = byte2 >> 6;
+	uint8 reg_field = (byte2 >> 3) & 0b111;
+	uint8 rm_field = byte2 & 0b111;
+
+	const char* reg_s = register_name_lookup[reg_field][w];
+	char rm_s[32];
+
+	// Register Mode
+	if (mod_field == 0b11)
+	{
+		sprintf_s(rm_s, sizeof(rm_s), "%s", register_name_lookup[rm_field][w]);
+	}
+	// Direct Address Mem Mode
+	else if ((!mod_field) * (rm_field == 0b110))
+	{
+		sprintf_s(rm_s, sizeof(rm_s), "[%hu]", *((Word*)&data[bytes_read]));
+		bytes_read += 2;
+	}
+	// Mem Mode w/o Displacement
+	else if (!mod_field)
+	{
+		sprintf_s(rm_s, sizeof(rm_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
+	}
+	// Mem Mode with Displacement
+	else
+	{
+		int32 displacement_value;
+		if (mod_field == 0b01)
+			displacement_value = (int8)data[bytes_read];
+		else
+			displacement_value = *((int16*)&data[bytes_read]);
+
+		bytes_read += mod_field;
+
+		if (displacement_value)
+		{
+			const char* signs[2] = {"+", "-"};
+			const char* sign = signs[displacement_value < 0];
+
+			sprintf_s(rm_s, sizeof(rm_s), "[%s %s %i]", mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
+		}
+		else
+		{
+			sprintf_s(rm_s, sizeof(rm_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
+		}
+	}
+
+	if (d)
+		print_out("%s %s, %s\n", op, reg_s, rm_s);
+	else
+		print_out("%s %s, %s\n", op, rm_s, reg_s);
+
+	return bytes_read;
+}
+
+// 0bxxxxxxxw(1) mod(2)xxxr/m(3) {disp-low} {disp-high} data-low {data-high}
+static int32 _inst_decode_non_arithm_imm_to_mem_reg(const char* op, Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+	Byte byte2 = data[1];
+	uint32 bytes_read = 2;
+
+	bool8 w = byte1 & 1;
+
+	uint8 mod_field = byte2 >> 6;
+	uint8 rm_field = byte2 & 0b111;
+
+	char src_s[32];
+	char dest_s[32];
+
+	// Register Mode
+	if (mod_field == 0b11)
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "%s", register_name_lookup[rm_field][w]);
+	}
+	// Direct Address Mem Mode
+	else if ((!mod_field) * (rm_field == 0b110))
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "[%hu]", *((Word*)&data[bytes_read]));
+		bytes_read += 2;
+	}
+	// Mem Mode w/o Displacement
+	else if (!mod_field)
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
+	}
+	// Mem Mode with Displacement
+	else
+	{
+		int32 displacement_value;
+		if (mod_field == 0b01)
+			displacement_value = (int8)data[bytes_read];
+		else
+			displacement_value = *((int16*)&data[bytes_read]);
+
+		bytes_read += mod_field;
+
+		if (displacement_value)
+		{
+			const char* signs[2] = {"+", "-"};
+			const char* sign = signs[displacement_value < 0];
+
+			sprintf_s(dest_s, sizeof(dest_s), "[%s %s %i]", mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
+		}
+		else
+		{
+			sprintf_s(dest_s, sizeof(dest_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
+		}
+	}
+
+	if(w)
+	{
+		Word imm = *((Word*)&data[bytes_read]);
+		sprintf_s(src_s, sizeof(src_s), "word %hu", imm);
+		bytes_read += 2;
+	}
+	else
+	{
+		Byte imm = data[bytes_read];
+		sprintf_s(src_s, sizeof(src_s), "byte %hhu", imm);
+		bytes_read += 1;
+	}
+
+	print_out("%s %s, %s\n", op, dest_s, src_s);
+
+	return bytes_read;
+}
+
+// 0bxxxxxxs(1)w(1) mod(2)xxxr/m(3) {disp-low} {disp-high} data-low {data-high}
+static int32 _inst_decode_arithm_imm_to_mem_reg(const char* op, Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+	Byte byte2 = data[1];
+	uint32 bytes_read = 2;
+
+	bool8 s = (byte1 >> 1) & 1;
+	bool8 w = byte1 & 1;
+
+	uint8 mod_field = byte2 >> 6;
+	uint8 rm_field = byte2 & 0b111;
+
+	char src_s[32];
+	char dest_s[32];
+
+	static char mem_prefix_lookup[2][5] = {"byte", "word"};
+
+	// Register Mode
+	if (mod_field == 0b11)
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "%s", register_name_lookup[rm_field][w]);
+	}
+	// Direct Address Mem Mode
+	else if ((!mod_field) * (rm_field == 0b110))
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "%s [%hu]", mem_prefix_lookup[s], *((Word*)&data[bytes_read]));
+		bytes_read += 2;
+	}
+	// Mem Mode w/o Displacement
+	else if (!mod_field)
+	{
+		sprintf_s(dest_s, sizeof(dest_s), "%s [%s]", mem_prefix_lookup[s], mem_mode_rm_field_reg_lookup[rm_field]);
+	}
+	// Mem Mode with Displacement
+	else
+	{
+		int32 displacement_value;
+		if (mod_field == 0b01)
+			displacement_value = (int8)data[bytes_read];
+		else
+			displacement_value = *((int16*)&data[bytes_read]);
+
+		bytes_read += mod_field;
+
+		if (displacement_value)
+		{
+			const char* signs[2] = {"+", "-"};
+			const char* sign = signs[displacement_value < 0];
+
+			sprintf_s(dest_s, sizeof(dest_s), "%s [%s %s %i]", mem_prefix_lookup[s], mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
+		}
+		else
+		{
+			sprintf_s(dest_s, sizeof(dest_s), "%s [%s]", mem_prefix_lookup[s], mem_mode_rm_field_reg_lookup[rm_field]);
+		}
+	}
+
+	if(w && !s)
+	{
+		Word imm = *((Word*)&data[bytes_read]);
+		sprintf_s(src_s, sizeof(src_s), "%hu", imm);
+		bytes_read += 2;
+	}
+	else
+	{
+		Byte imm = data[bytes_read];
+		sprintf_s(src_s, sizeof(src_s), "%hhu", imm);
+		bytes_read += 1;
+	}
+
+	print_out("%s %s, %s\n", op, dest_s, src_s);
+
+	return bytes_read;
+}
+
+// 0b1011w(1)reg(3) data-low {data-high}
+static int32 _inst_mov_imm_to_reg(Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+
+	bool8 w = (byte1 >> 3) & 1;
+	uint8 reg_field = byte1 & 0b111;
+	
+	if (w)
+	{
+		Word imm = *((Word*)&data[1]);
+		print_out("mov %s, %hu\n", register_name_lookup[reg_field][w], imm);
+		return 3;
+	}
+	else
+	{
+		Byte imm = data[1];
+		print_out("mov %s, %hhu\n", register_name_lookup[reg_field][w], imm);
+		return 2;
+	}
+}
+
+// 0b0000010w(1) data-low {data-high}
+static int32 _inst_decode_imm_to_acc(const char* op, Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+
+	bool8 w = byte1 & 1;
+	
+	if (w)
+	{
+		Word imm = *((Word*)&data[1]);
+		print_out("%s ax, %hu\n", op, imm);
+		return 3;
+	}
+	else
+	{
+		Byte imm = data[1];
+		print_out("%s al, %hhu\n", op, imm);
+		return 2;
+	}
+}
+
+// 0b1010000w(1) addr-low addr-high
+static int32 _inst_mov_mem_to_acc(Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+
+	bool8 w = byte1 & 1;
+	
+	if (w)
+	{
+		Word imm = *((Word*)&data[1]);
+		print_out("mov ax, [%hu]\n", imm);
+	}
+	else
+	{
+		Byte imm = data[1];
+		print_out("mov al, [%hhu]\n", imm);
+	}
+
+	return 3;
+}
+
+// 0b1010001w(1) addr-low addr-high
+static int32 _inst_mov_acc_to_mem(Byte* data, uint32 remaining_size)
+{
+	Byte byte1 = data[0];
+
+	bool8 w = byte1 & 1;
+	
+	if (w)
+	{
+		Word imm = *((Word*)&data[1]);
+		print_out("mov [%hu], ax\n", imm);
+	}
+	else
+	{
+		Byte imm = data[1];
+		print_out("mov [%hhu], al\n", imm);
+	}
+
+	return 3;
+}
+
+// 0b10001d(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
+static int32 _inst_mov_mem_reg_transfer(Byte* data, uint32 remaining_size)
+{
+	return _inst_decode_mem_reg_transfer("mov", data, remaining_size);
+}
+
+// 0b1100011w(1) mod(2)000r/m(3) {disp-low} {disp-high} data-low {data-high}
+static int32 _inst_mov_imm_to_mem_reg(Byte* data, uint32 remaining_size)
+{
+	return _inst_decode_non_arithm_imm_to_mem_reg("mov", data, remaining_size);
+}
+
+// 0bxxxxxxd(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
+static int32 _inst_arithm_mem_reg_transfer(Byte* data, uint32 remaining_size)
+{
+	return _inst_decode_mem_reg_transfer(arithm_op_lookup[(data[0] >> 3) & 0b111], data, remaining_size);
+}
+
+// 0b100000s(1)w(1) mod(2)000r/m(3) {disp-low} {disp-high} data-low {data-high}
+static int32 _inst_arithm_imm_to_mem_reg(Byte* data, uint32 remaining_size)
+{
+	return _inst_decode_arithm_imm_to_mem_reg(arithm_op_lookup[(data[1] >> 3) & 0b111], data, remaining_size);
+}
+
+// 0bxxxxxxxw(1) data-low {data-high}
+static int32 _inst_arithm_imm_to_acc(Byte* data, uint32 remaining_size)
+{
+	return _inst_decode_imm_to_acc(arithm_op_lookup[(data[0] >> 3) & 0b111], data, remaining_size);
+}
+
+// 0bxxxxxxxx ip-inc8
+static int32 _inst_decode_conditional_jump(const char* op, Byte* data, uint32 remaining_size)
+{
+	int8 increment = *((int8*)&data[1]);
+	print_out("; %s %hhi\n", op, increment);
+	return 2;
+}
+
+#define cond_jmp_func(op) static int32 _inst_##op(Byte* data, uint32 remaining_size) { return _inst_decode_conditional_jump(#op, data, remaining_size); }
+
+cond_jmp_func(je);		//0b01110100
+cond_jmp_func(jl);		//0b01111100
+cond_jmp_func(jle);		//0b01111110
+cond_jmp_func(jb);		//0b01110010
+cond_jmp_func(jbe);		//0b01110110
+cond_jmp_func(jp);		//0b01111010
+cond_jmp_func(jo);		//0b01110000
+cond_jmp_func(js);		//0b01111000
+cond_jmp_func(jnz);		//0b01110101
+cond_jmp_func(jnl);		//0b01111101
+cond_jmp_func(jg);		//0b01111111
+cond_jmp_func(jnb);		//0b01110011
+cond_jmp_func(ja);		//0b01110111
+cond_jmp_func(jnp);		//0b01111011
+cond_jmp_func(jno);		//0b01110001
+cond_jmp_func(jns);		//0b01111001
+cond_jmp_func(loop);	//0b11100010
+cond_jmp_func(loopz);	//0b11100001
+cond_jmp_func(loopnz);	//0b11100000
+cond_jmp_func(jcxz);	//0b11100011
+
+void decoder_initialize_lookups()
+{
+	// mov
+	for (uint32 i = 0b10001000; i <= 0b10001011; i++) primary_instruction_lookup[i] = _inst_mov_mem_reg_transfer;
+	for (uint32 i = 0b11000110; i <= 0b11000111; i++) primary_instruction_lookup[i] = _inst_mov_imm_to_mem_reg;
+	for (uint32 i = 0b10110000; i <= 0b10111111; i++) primary_instruction_lookup[i] = _inst_mov_imm_to_reg;
+	for (uint32 i = 0b10100000; i <= 0b10100001; i++) primary_instruction_lookup[i] = _inst_mov_mem_to_acc;
+	for (uint32 i = 0b10100010; i <= 0b10100011; i++) primary_instruction_lookup[i] = _inst_mov_acc_to_mem;
+
+	// all arithmetic op
+	for (uint32 i = 0b10000000; i <= 0b10000011; i++) primary_instruction_lookup[i] = _inst_arithm_imm_to_mem_reg;
+	for (uint32 i = 0; i < sizeof(arithm_op_lookup) / sizeof(arithm_op_lookup[0]); i++)
+	{
+		uint32 op_id_mask = i << 3;
+		for (uint32 j = (0b00000000 | op_id_mask); j <= (0b00000011 | op_id_mask); j++) primary_instruction_lookup[j] = _inst_arithm_mem_reg_transfer;
+		for (uint32 j = (0b00000100 | op_id_mask); j <= (0b00000101 | op_id_mask); j++) primary_instruction_lookup[j] = _inst_arithm_imm_to_acc;
+	}
+
+	primary_instruction_lookup[0b01110100] = _inst_je;
+	primary_instruction_lookup[0b01111100] = _inst_jl;
+	primary_instruction_lookup[0b01111110] = _inst_jle;
+	primary_instruction_lookup[0b01110010] = _inst_jb;
+	primary_instruction_lookup[0b01110110] = _inst_jbe;
+	primary_instruction_lookup[0b01111010] = _inst_jp;
+	primary_instruction_lookup[0b01110000] = _inst_jo;
+	primary_instruction_lookup[0b01111000] = _inst_js;
+	primary_instruction_lookup[0b01110101] = _inst_jnz;
+	primary_instruction_lookup[0b01111101] = _inst_jnl;
+	primary_instruction_lookup[0b01111111] = _inst_jg;
+	primary_instruction_lookup[0b01110011] = _inst_jnb;
+	primary_instruction_lookup[0b01110111] = _inst_ja;
+	primary_instruction_lookup[0b01111011] = _inst_jnp;
+	primary_instruction_lookup[0b01110001] = _inst_jno;
+	primary_instruction_lookup[0b01111001] = _inst_jns;
+	primary_instruction_lookup[0b11100010] = _inst_loop;
+	primary_instruction_lookup[0b11100001] = _inst_loopz;
+	primary_instruction_lookup[0b11100000] = _inst_loopnz;
+	primary_instruction_lookup[0b11100011] = _inst_jcxz;
+}
+
+int32 decoder_decode_instruction(Byte* data, uint32 remaining_size)
+{
+	FP_parse_instruction parse_inst_func = primary_instruction_lookup[*data];
+	if (!parse_inst_func)
+		return -1;
+
+	return parse_inst_func(data, remaining_size);
+}

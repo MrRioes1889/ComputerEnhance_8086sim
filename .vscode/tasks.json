@@ -1,0 +1,15 @@
+{
+    "version":"2.0.0",
+    "tasks": 
+    [
+        {
+            "label": "CMake: Configure and Build",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "CMake: configure",
+                "CMake: build"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}
