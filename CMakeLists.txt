@@ -23,6 +23,7 @@ endif()
 
 file(GLOB_RECURSE SRC_FILES "${SOURCE_DIR}/*.c")
 file(GLOB_RECURSE HEADER_FILES "${SOURCE_DIR}/*.h")
+file(GLOB_RECURSE INLINE_FILES "${SOURCE_DIR}/*.inl")
 
 # Set output directories
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
@@ -44,7 +45,7 @@ set_target_properties(
 )
 
 if (MSVC)
-    target_compile_options(${APP_NAME} PRIVATE /W4 /WX /wd4100)
+    target_compile_options(${APP_NAME} PRIVATE /W4 /WX)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(${APP_NAME} PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -61,3 +62,4 @@ target_include_directories(
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${APP_NAME})
 source_group(TREE "${PROJ_DIR}" FILES ${SRC_FILES})
 source_group(TREE "${PROJ_DIR}" FILES ${HEADER_FILES})
+source_group(TREE "${PROJ_DIR}" FILES ${INLINE_FILES})

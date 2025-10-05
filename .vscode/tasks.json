@@ -9,7 +9,11 @@
                 "CMake: configure",
                 "CMake: build"
             ],
-            "problemMatcher": []
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
         }
     ]
 }

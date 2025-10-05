@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include "common.h"
-#include "decoder.h"
+#include "decoder2.h"
 
 typedef struct
 {
@@ -16,7 +16,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0041_add_sub_cmp_jnz";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0038_many_register_mov";
 	else
 		bin_filepath = argv[1];
 
@@ -56,18 +56,18 @@ int main(int argc, char** argv)
 	fread_s(read_buf.data, read_buf.size, read_buf.size, 1, in_binary_file);
 	fclose(in_binary_file);
 
-	decoder_initialize_lookups();
+	decoder2_initialize_lookup();
 	uint32 read_offset = 0;
 	while (read_offset < read_buf.size)
 	{
-		int32 bytes_read = decoder_decode_instruction(&read_buf.data[read_offset], read_buf.size - read_buf.size);
-		if (bytes_read < 0)
+		Instruction inst = decoder2_decode_instruction(&read_buf.data[read_offset], read_buf.size - read_buf.size);
+		if (inst.op_type == OpType_none)
 		{
 			print_out("Error: failed to read next instruction at offset %u.\n", read_offset);
 			break;
 		}
 
-		read_offset += bytes_read;
+		read_offset += inst.size;
 	}
 
 	fclose(out_asm_file);
