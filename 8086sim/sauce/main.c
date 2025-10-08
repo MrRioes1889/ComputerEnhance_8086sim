@@ -2,6 +2,7 @@
 #include <malloc.h>
 #include "common.h"
 #include "decoder2.h"
+#include "utils.h"
 
 typedef struct
 {
@@ -67,6 +68,7 @@ int main(int argc, char** argv)
 			break;
 		}
 
+		print_instruction(inst, out_asm_file);
 		read_offset += inst.size;
 	}
 

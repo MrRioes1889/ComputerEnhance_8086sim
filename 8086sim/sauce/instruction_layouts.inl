@@ -41,13 +41,16 @@
 inst_layout(mov, 0, {B(100010), D, W, MOD, REG, RM})
 inst_layout_alt(mov, HasData | DataWideIfW, {B(1100011), W, MOD, B(000), RM, ImpD(0)})
 inst_layout_alt(mov, HasData | DataWideIfW, {B(1011), W, REG, ImpD(1)})
-inst_layout_alt(mov, HasAddr, {B(1010000), W, ImpREG(0), ImpMOD(0), ImpRM(0b110), ImpD(1)})
-inst_layout_alt(mov, HasAddr, {B(1010001), W, ImpREG(0), ImpMOD(0), ImpRM(0b110), ImpD(0)})
+inst_layout_alt(mov, HasAddr, {B(1010000), W, ImpREG(0b000), ImpMOD(0), ImpRM(0b110), ImpD(1)})
+inst_layout_alt(mov, HasAddr, {B(1010001), W, ImpREG(0b000), ImpMOD(0), ImpRM(0b110), ImpD(0)})
 inst_layout_alt(mov, 0, {B(100011), D, B(0), MOD, B(0), SR, RM})
 
 //inst_layout(push)
 //inst_layout(pop)
-//inst_layout(xchg)
+
+inst_layout(xchg, 0, {B(1000011), W, MOD, REG, RM, ImpD(1)})
+inst_layout_alt(xchg, 0, {B(10010), REG, ImpMOD(0b11), ImpW(1), ImpRM(0)})
+
 //inst_layout(in)
 //inst_layout(out)
 //inst_layout(xlat)
@@ -90,7 +93,8 @@ inst_layout_alt(mov, 0, {B(100011), D, B(0), MOD, B(0), SR, RM})
 //inst_layout(test)
 //inst_layout(or)
 //inst_layout(xor)
-//inst_layout(rep)
+
+inst_layout(rep, 0, {B(1111001), Z})
 //inst_layout(movs)
 //inst_layout(cmps)
 //inst_layout(scas)
@@ -133,8 +137,8 @@ inst_layout_alt(mov, 0, {B(100011), D, B(0), MOD, B(0), SR, RM})
 //inst_layout(hlt)
 //inst_layout(wait)
 //inst_layout(esc)
-//inst_layout(lock)
-//inst_layout(segment)
+inst_layout(lock, 0, {B(11110000)})
+inst_layout(segment, 0, {B(001), SR, B(110)})
 
 #undef B
 #undef D
