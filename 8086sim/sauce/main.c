@@ -17,7 +17,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0038_many_register_mov";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0041_add_sub_cmp_jnz";
 	else
 		bin_filepath = argv[1];
 

@@ -26,23 +26,18 @@
 #define ImpRM(Value) {IBitFieldType_RM, 0, 0, Value}
 #define ImpD(Value) {IBitFieldType_D, 0, 0, Value}
 #define ImpS(Value) {IBitFieldType_S, 0, 0, Value}
-    
-//#define Disp {IBitFieldType_HasDisp, 0, 0, 1}
-//#define Addr {IBitFieldType_HasDisp, 0, 0, 1}, {IBitFieldType_DispAlwaysW, 0, 0, 1}
-//#define Data {IBitFieldType_HasData, 0, 0, 1}
-//#define DataIfW {IBitFieldType_WMakesDataW, 0, 0, 1}
-//#define Flags(F) {F, 0, 0, 0, 1}
 
-#define AlwaysHasDisp InstructionLayoutFlag_AlwaysHasDisp
-#define HasAddr InstructionLayoutFlag_AlwaysHasDisp | InstructionLayoutFlag_DispAlwaysW
-#define HasData InstructionLayoutFlag_HasData
-#define DataWideIfW InstructionLayoutFlag_DataWideIfW
+#define F_AlwaysHasDisp InstructionLayoutFlag_AlwaysHasDisp
+#define F_HasAddr InstructionLayoutFlag_AlwaysHasDisp | InstructionLayoutFlag_DispAlwaysW
+#define F_HasData InstructionLayoutFlag_HasData
+#define F_DataWideIfW InstructionLayoutFlag_DataWideIfW
+#define F_RelativeJumpDisp InstructionLayoutFlag_RelJUMPDisp | InstructionLayoutFlag_AlwaysHasDisp
 
 inst_layout(mov, 0, {B(100010), D, W, MOD, REG, RM})
-inst_layout_alt(mov, HasData | DataWideIfW, {B(1100011), W, MOD, B(000), RM, ImpD(0)})
-inst_layout_alt(mov, HasData | DataWideIfW, {B(1011), W, REG, ImpD(1)})
-inst_layout_alt(mov, HasAddr, {B(1010000), W, ImpREG(0b000), ImpMOD(0), ImpRM(0b110), ImpD(1)})
-inst_layout_alt(mov, HasAddr, {B(1010001), W, ImpREG(0b000), ImpMOD(0), ImpRM(0b110), ImpD(0)})
+inst_layout_alt(mov, F_HasData | F_DataWideIfW, {B(1100011), W, MOD, B(000), RM, ImpD(0)})
+inst_layout_alt(mov, F_HasData | F_DataWideIfW, {B(1011), W, REG, ImpD(1)})
+inst_layout_alt(mov, F_HasAddr, {B(1010000), W, ImpREG(0b000), ImpMOD(0), ImpRM(0b110), ImpD(1)})
+inst_layout_alt(mov, F_HasAddr, {B(1010001), W, ImpREG(0b000), ImpMOD(0), ImpRM(0b110), ImpD(0)})
 inst_layout_alt(mov, 0, {B(100011), D, B(0), MOD, B(0), SR, RM})
 
 //inst_layout(push)
@@ -61,16 +56,28 @@ inst_layout_alt(xchg, 0, {B(10010), REG, ImpMOD(0b11), ImpW(1), ImpRM(0)})
 //inst_layout(sahf)
 //inst_layout(pushf)
 //inst_layout(popf)
-//inst_layout(add)
+
+inst_layout(add, 0, {B(000000), D, W, MOD, REG, RM})
+inst_layout_alt(add, F_HasData | F_DataWideIfW, {B(100000), S, W, MOD, B(000), RM})
+inst_layout_alt(add, F_HasData | F_DataWideIfW, {B(0000010), W, ImpREG(0b000), ImpD(1)})
+
 //inst_layout(adc)
 //inst_layout(inc)
 //inst_layout(aaa)
 //inst_layout(daa)
-//inst_layout(sub)
+
+inst_layout(sub, 0, {B(001010), D, W, MOD, REG, RM})
+inst_layout_alt(sub, F_HasData | F_DataWideIfW, {B(100000), S, W, MOD, B(101), RM})
+inst_layout_alt(sub, F_HasData | F_DataWideIfW, {B(0010110), W, ImpREG(0b000), ImpD(1)})
+
 //inst_layout(sbb)
 //inst_layout(dec)
 //inst_layout(neg)
-//inst_layout(cmp)
+
+inst_layout(cmp, 0, {B(001110), D, W, MOD, REG, RM})
+inst_layout_alt(cmp, F_HasData | F_DataWideIfW, {B(100000), S, W, MOD, B(111), RM})
+inst_layout_alt(cmp, F_HasData | F_DataWideIfW, {B(0011110), W, ImpREG(0b000), ImpD(1)})
+
 //inst_layout(aas)
 //inst_layout(das)
 //inst_layout(mul)
@@ -103,26 +110,28 @@ inst_layout(rep, 0, {B(1111001), Z})
 //inst_layout(call)
 //inst_layout(jmp)
 //inst_layout(ret)
-//inst_layout(je)
-//inst_layout(jl)
-//inst_layout(jle)
-//inst_layout(jb)
-//inst_layout(jbe)
-//inst_layout(jp)
-//inst_layout(jo)
-//inst_layout(js)
-//inst_layout(jne)
-//inst_layout(jnl)
-//inst_layout(jg)
-//inst_layout(jnb)
-//inst_layout(ja)
-//inst_layout(jnp)
-//inst_layout(jno)
-//inst_layout(jns)
-//inst_layout(loop)
-//inst_layout(loopz)
-//inst_layout(loopnz)
-//inst_layout(jcxz)
+
+inst_layout(je, F_RelativeJumpDisp, {B(01110100)})
+inst_layout(jl, F_RelativeJumpDisp, {B(01111100)})
+inst_layout(jle, F_RelativeJumpDisp, {B(01111110)})
+inst_layout(jb, F_RelativeJumpDisp, {B(01110010)})
+inst_layout(jbe, F_RelativeJumpDisp, {B(01110110)})
+inst_layout(jp, F_RelativeJumpDisp, {B(01111010)})
+inst_layout(jo, F_RelativeJumpDisp, {B(01110000)})
+inst_layout(js, F_RelativeJumpDisp, {B(01111000)})
+inst_layout(jne, F_RelativeJumpDisp, {B(01110101)})
+inst_layout(jnl, F_RelativeJumpDisp, {B(01111101)})
+inst_layout(jg, F_RelativeJumpDisp, {B(01111111)})
+inst_layout(jnb, F_RelativeJumpDisp, {B(01110011)})
+inst_layout(ja, F_RelativeJumpDisp, {B(01110111)})
+inst_layout(jnp, F_RelativeJumpDisp, {B(01111011)})
+inst_layout(jno, F_RelativeJumpDisp, {B(01110001)})
+inst_layout(jns, F_RelativeJumpDisp, {B(01111001)})
+inst_layout(loop, F_RelativeJumpDisp, {B(11100010)})
+inst_layout(loopz, F_RelativeJumpDisp, {B(11100001)})
+inst_layout(loopnz, F_RelativeJumpDisp, {B(11100000)})
+inst_layout(jcxz, F_RelativeJumpDisp, {B(11100011)})
+
 //inst_layout(int)
 //inst_layout(int3)
 //inst_layout(into)
@@ -160,12 +169,12 @@ inst_layout(segment, 0, {B(001), SR, B(110)})
 #undef ImpRM
 #undef ImpD
 #undef ImpS
-  
-#undef Disp
-#undef Addr
-#undef Data
-#undef DataIfW
-#undef Flags
+
+#undef F_AlwaysHasDisp
+#undef F_HasAddr
+#undef F_HasData
+#undef F_DataWideIfW
+#undef F_RelativeJumpDisp
 
 #undef inst_layout
 #undef inst_layout_alt

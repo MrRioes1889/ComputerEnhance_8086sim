@@ -130,14 +130,16 @@ Instruction decoder2_decode_instruction(Byte* read_ptr, uint32 remaining_size)
 
     int16 disp = 0;
     uint8 disp_size = has_disp + (has_wide_disp * has_disp);
-    memcpy(&disp, &read_ptr[ret_inst.size], disp_size);
+    if (disp_size)
+        disp = disp_size == 2 ? *(int16*)(&read_ptr[ret_inst.size]) : (int8)read_ptr[ret_inst.size];
+    ret_inst.size += disp_size;
 
     int16 data = 0;
     uint8 data_size = has_data + (has_wide_data * has_data);
-    memcpy(&data, &read_ptr[ret_inst.size], data_size);
-
-    ret_inst.size += disp_size;
+    if (data_size)
+        data = data_size == 2 ? *(uint16*)(&read_ptr[ret_inst.size]) : (uint8)read_ptr[ret_inst.size];
     ret_inst.size += data_size;
+
     ret_inst.op_type = layout.op_type;
     ret_inst.flags = 0;
     ret_inst.address = 0;
@@ -220,30 +222,38 @@ void decoder2_initialize_lookup()
     {
         InstructionLayout layout = instruction_layouts[layout_i];
         uint8 min_first_byte = 0;
-        uint8 max_first_byte = 0;
 
         uint8 bit_index = 0;
         uint8 field_i = 0;
+        bool8 use_secondary_lookup = false;
+        uint8 sec_lookup_index = 0;
+        uint8 variable_first_byte_fields_size = 0;
+        uint8 variable_first_byte_fields_shift = 0;
         while (field_i < array_count(layout.fields) && layout.fields[field_i].type != IBitFieldType_None)
         {
             IBitField field = layout.fields[field_i];
             if (bit_index < 8)
             {
                 min_first_byte <<= field.size;
-                max_first_byte <<= field.size;
 
                 if (field.type == IBitFieldType_Static)
                 {
                     min_first_byte |= field.value;
-                    max_first_byte |= field.value;
+                    variable_first_byte_fields_shift += field.size;
                 }
                 else
                 {
-                    max_first_byte |= (0xFF >> (8 - field.size));
+                    variable_first_byte_fields_shift = 0;
+                    variable_first_byte_fields_size += field.size;
                 }
             }
 
             instruction_layouts[layout_i].fields[field_i].shift = 8 - (bit_index % 8) - field.size;
+            if (bit_index == 10 && field.type == IBitFieldType_Static)
+            {
+                use_secondary_lookup = true;
+                sec_lookup_index = field.value;
+            }
 
             bit_index += field.size;
             field_i++;
@@ -251,11 +261,10 @@ void decoder2_initialize_lookup()
         // Check if instruction layout size conforms to multiple of bytes
         assert(bit_index % 8 == 0);
 
-        bool8 use_secondary_lookup = {layout.fields[field_i + 1].type == IBitFieldType_Static};
-        for (uint8 first_byte = min_first_byte; first_byte <= max_first_byte; first_byte++)
+        for (uint8 variable_fields_value = 0; variable_fields_value <= (0xFF >> (8 - variable_first_byte_fields_size)); variable_fields_value++)
         {
+            uint8 first_byte = min_first_byte | (variable_fields_value << variable_first_byte_fields_shift);
             instruction_layout_lookup[first_byte].use_first_index = !use_secondary_lookup;
-            uint8 sec_lookup_index = (use_secondary_lookup * layout.fields[field_i + 1].value);
             assert(sec_lookup_index < 8);
             instruction_layout_lookup[first_byte].layout_indices[sec_lookup_index] = layout_i;
         }

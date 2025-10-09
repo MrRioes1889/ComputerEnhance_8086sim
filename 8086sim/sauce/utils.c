@@ -102,10 +102,17 @@ void print_instruction(Instruction inst, FILE* asm_file)
                 if (flags & InstructionFlag_Segment)
                     print_out("%s:", reg_name_lookup[address.segment][2]);
 
-                print_out("[%s", address_base_lookup[address.base]);
-                if (address.displacement)
-                    print_out("%+hd", address.displacement);
-                print_out("]");
+                if (address.base == EffectiveAddressBase_direct)
+                {
+                    print_out("[%hd]", address.displacement);
+                }
+                else
+                {
+                    print_out("[%s", address_base_lookup[address.base]);
+                    if (address.displacement)
+                        print_out("%+hd", address.displacement);
+                    print_out("]");
+                }
             }
             break;
 

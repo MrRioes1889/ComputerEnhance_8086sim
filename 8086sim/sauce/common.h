@@ -20,6 +20,8 @@ typedef uint16_t Word;
 #pragma warning(disable : 4189)
 #endif
 
+#define false 0
+#define true 1
 #define array_count(arr) (sizeof(arr) / sizeof(arr[0]))
 
 void print_out(const char* format, ...);
