@@ -1,6 +1,6 @@
 #include "utils.h"
 
-static char op_mnemonic_lookup[OpTypeCount][8] =
+static char op_mnemonic_lookup[OpType_Count][8] =
 {
     [OpType_none] = "",
     #define inst_layout(mnemonic, ...) [OpType_##mnemonic] = #mnemonic,

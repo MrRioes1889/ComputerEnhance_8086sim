@@ -17,7 +17,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0041_add_sub_cmp_jnz";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/old/listing_0041_add_sub_cmp_jnz";
 	else
 		bin_filepath = argv[1];
 
@@ -57,6 +57,9 @@ int main(int argc, char** argv)
 	fread_s(read_buf.data, read_buf.size, read_buf.size, 1, in_binary_file);
 	fclose(in_binary_file);
 
+	SimulatorContext sim_context = {0};
+	simulator_context_init(&sim_context);
+
 	decoder_init();
 	uint32 read_offset = 0;
 	while (read_offset < read_buf.size)
@@ -71,6 +74,8 @@ int main(int argc, char** argv)
 		print_instruction(inst, out_asm_file);
 		read_offset += inst.size;
 	}
+
+	simulator_context_destroy(&sim_context);
 
 	fclose(out_asm_file);
 	free(read_buf.data);
