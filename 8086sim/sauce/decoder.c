@@ -1,453 +1,272 @@
 #include "decoder.h"
-#include "common.h"
 #include <stdio.h>
-#include <math.h>
+#include <string.h>
+#include <assert.h>
 
-typedef int32 (*FP_parse_instruction)(Byte* data, uint32 remaining_size);
-static FP_parse_instruction primary_instruction_lookup[256] = {0};
-
-// 8-bit, 16-bit register pairs
-static char register_name_lookup[8][2][3] = 
+typedef enum
 {
-	[0b000] = {"al","ax"},
-	[0b001] = {"cl","cx"},
-	[0b010] = {"dl","dx"},
-	[0b011] = {"bl","bx"},
-	[0b100] = {"ah","sp"},
-	[0b101] = {"ch","bp"},
-	[0b110] = {"dh","si"},
-	[0b111] = {"bh","di"},
+    IBitFieldType_None,
+    IBitFieldType_Static,
+    IBitFieldType_MOD,
+    IBitFieldType_REG,
+    IBitFieldType_RM,
+    IBitFieldType_SR,
+    IBitFieldType_Disp,
+    IBitFieldType_Data,
+
+    IBitFieldType_D,
+    IBitFieldType_S,
+    IBitFieldType_W,
+    IBitFieldType_V,
+    IBitFieldType_Z,
+
+    IBitFieldTypeCount
+} 
+IBitFieldType;
+
+typedef struct
+{
+    uint8 type;
+    uint8 size;
+    uint8 shift;
+    uint8 value;
+} 
+IBitField;
+
+typedef enum
+{
+    InstructionLayoutFlag_AlwaysHasDisp = 1 << 0,
+    InstructionLayoutFlag_DispAlwaysW = 1 << 1,
+    InstructionLayoutFlag_HasData = 1 << 2,
+    InstructionLayoutFlag_DataWideIfW = 1 << 3,
+    InstructionLayoutFlag_RMRegAlwaysW = 1 << 4,
+    InstructionLayoutFlag_RelJUMPDisp = 1 << 5,
+}
+InstructionLayoutFlag;
+
+typedef struct
+{
+    uint8 op_type;
+    uint8 flags;
+    IBitField fields[16];
+}
+InstructionLayout;
+
+static InstructionLayout instruction_layouts[] =
+{
+    #define inst_layout(mnemonic, flags, ...) {OpType_##mnemonic, flags, __VA_ARGS__},
+    #define inst_layout_alt(mnemonic, flags, ...) {OpType_##mnemonic, flags, __VA_ARGS__},
+    #include "instruction_layouts.inl"
 };
 
-static const char* mem_mode_rm_field_reg_lookup[] =
+typedef struct
 {
-	[0b000] = "bx + si",
-	[0b001] = "bx + di",
-	[0b010] = "bp + si",
-	[0b011] = "bp + di",
-	[0b100] = "si",
-	[0b101] = "di",
-	[0b110] = "bp",
-	[0b111] = "bx",
+    bool8 use_first_index;
+    uint8 layout_indices[8];
+}
+LookupEntry;
+
+static LookupEntry instruction_layout_lookup[0xFF] = {0};
+
+#define invalid_instruction_layout_id 0xFF
+
+static RegisterAccess register_lookup[8][2] =
+{
+    {{RegisterIndex_a, 0, 1}, {RegisterIndex_a, 0, 2}},
+    {{RegisterIndex_c, 0, 1}, {RegisterIndex_c, 0, 2}},
+    {{RegisterIndex_d, 0, 1}, {RegisterIndex_d, 0, 2}},
+    {{RegisterIndex_b, 0, 1}, {RegisterIndex_b, 0, 2}},
+    {{RegisterIndex_a, 1, 1}, {RegisterIndex_sp, 0, 2}},
+    {{RegisterIndex_c, 1, 1}, {RegisterIndex_bp, 0, 2}},
+    {{RegisterIndex_d, 1, 1}, {RegisterIndex_si, 0, 2}},
+    {{RegisterIndex_b, 1, 1}, {RegisterIndex_di, 0, 2}},
 };
 
-static char arithm_op_lookup[8][4] =
+Instruction decoder_decode_instruction(Byte* read_ptr, uint32 remaining_size)
 {
-	[0b000] = "add",
-	[0b001] = "or",
-	[0b010] = "adc",
-	[0b011] = "sbb",
-	[0b100] = "and",
-	[0b101] = "sub",
-	[0b110] = "xor",
-	[0b111] = "cmp",
-};
+    Instruction ret_inst = {.op_type = OpType_none};
 
-// 0bxxxxxxd(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
-static int32 _inst_decode_mem_reg_transfer(const char* op, Byte* data, uint32 remaining_size)
-{
-	Byte byte1 = data[0];
-	Byte byte2 = data[1];
-	uint32 bytes_read = 2;
+    uint8 layout_index = invalid_instruction_layout_id;
+    LookupEntry lookup_entry = instruction_layout_lookup[read_ptr[0]];
+    layout_index = lookup_entry.layout_indices[lookup_entry.use_first_index ? 0 : ((read_ptr[1] >> 3) & 0b111)];
 
-	bool8 d = (byte1 >> 1) & 1;
-	bool8 w = byte1 & 1;
+    if (layout_index == invalid_instruction_layout_id)
+        return ret_inst;
 
-	uint8 mod_field = byte2 >> 6;
-	uint8 reg_field = (byte2 >> 3) & 0b111;
-	uint8 rm_field = byte2 & 0b111;
+    InstructionLayout layout = instruction_layouts[layout_index];
 
-	const char* reg_s = register_name_lookup[reg_field][w];
-	char rm_s[32];
+    bool8 has_always_disp = ((layout.flags & InstructionLayoutFlag_AlwaysHasDisp) != 0);
+    bool8 has_always_wide_disp = ((layout.flags & InstructionLayoutFlag_DispAlwaysW) != 0);
+    bool8 has_data = ((layout.flags & InstructionLayoutFlag_HasData) != 0);
+    bool8 has_wide_data_if_w = ((layout.flags & InstructionLayoutFlag_DataWideIfW) != 0);
+    bool8 has_relative_jump_displacement = ((layout.flags & InstructionLayoutFlag_RelJUMPDisp) != 0);
 
-	// Register Mode
-	if (mod_field == 0b11)
-	{
-		sprintf_s(rm_s, sizeof(rm_s), "%s", register_name_lookup[rm_field][w]);
-	}
-	// Direct Address Mem Mode
-	else if ((!mod_field) * (rm_field == 0b110))
-	{
-		sprintf_s(rm_s, sizeof(rm_s), "[%hu]", *((Word*)&data[bytes_read]));
-		bytes_read += 2;
-	}
-	// Mem Mode w/o Displacement
-	else if (!mod_field)
-	{
-		sprintf_s(rm_s, sizeof(rm_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
-	}
-	// Mem Mode with Displacement
-	else
-	{
-		int32 displacement_value;
-		if (mod_field == 0b01)
-			displacement_value = (int8)data[bytes_read];
-		else
-			displacement_value = *((int16*)&data[bytes_read]);
+    uint16 has_field_flags = 0;
+    uint8 fields[IBitFieldTypeCount] = {0};
+    uint8 bit_index = 0;
+    for (uint8 layout_field_i = 0; layout_field_i < array_count(layout.fields) && layout.fields[layout_field_i].type != IBitFieldType_None; layout_field_i++)
+    {
+        IBitField layout_field = layout.fields[layout_field_i];
+        uint8 byte = read_ptr[bit_index / 8];
+        uint8 mask = 0xFF >> (8 - layout_field.size);
 
-		bytes_read += mod_field;
+        fields[layout_field.type] = layout_field.value ? layout_field.value : ((byte >> layout_field.shift) & mask);
+        has_field_flags |= (1 << layout_field.type);
+        bit_index += layout_field.size;
+    }
+    ret_inst.size = (bit_index / 8);
 
-		if (displacement_value)
-		{
-			const char* signs[2] = {"+", "-"};
-			const char* sign = signs[displacement_value < 0];
+    uint8 mod = fields[IBitFieldType_MOD];
+    uint8 rm = fields[IBitFieldType_RM];
+    uint8 w = fields[IBitFieldType_W];
+    uint8 s = fields[IBitFieldType_S];
+    uint8 d = fields[IBitFieldType_D];
+    uint8 v = fields[IBitFieldType_V];
 
-			sprintf_s(rm_s, sizeof(rm_s), "[%s %s %i]", mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
-		}
-		else
-		{
-			sprintf_s(rm_s, sizeof(rm_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
-		}
-	}
+    bool8 has_direct_address = (mod == 0b00) && (rm == 0b110);
+    bool8 has_disp = has_always_disp || (mod == 0b10) || (mod == 0b01) || has_direct_address;
+    bool8 has_wide_disp = has_always_wide_disp || (mod == 0b10) || has_direct_address;
+    bool8 has_wide_data = has_wide_data_if_w && (!s) && w; 
 
-	if (d)
-		print_out("%s %s, %s\n", op, reg_s, rm_s);
-	else
-		print_out("%s %s, %s\n", op, rm_s, reg_s);
+    int16 disp = 0;
+    uint8 disp_size = has_disp + (has_wide_disp * has_disp);
+    if (disp_size)
+        disp = disp_size == 2 ? *(int16*)(&read_ptr[ret_inst.size]) : (int8)read_ptr[ret_inst.size];
+    ret_inst.size += disp_size;
 
-	return bytes_read;
+    int16 data = 0;
+    uint8 data_size = has_data + (has_wide_data * has_data);
+    if (data_size)
+        data = data_size == 2 ? *(uint16*)(&read_ptr[ret_inst.size]) : (uint8)read_ptr[ret_inst.size];
+    ret_inst.size += data_size;
+
+    ret_inst.op_type = layout.op_type;
+    ret_inst.flags = 0;
+    ret_inst.address = 0;
+    if (w)
+        ret_inst.flags |= InstructionFlag_Wide;
+
+    InstructionOperand* reg_operand = &ret_inst.operands[!d];
+    InstructionOperand* mod_operand = &ret_inst.operands[d];
+
+    if (has_field_flags & (1 << IBitFieldType_SR))
+    {
+        reg_operand->operand_type = InstructionOperandType_Register;
+        reg_operand->register_access.reg_index = RegisterIndex_es + (fields[IBitFieldType_SR] & 0b11);
+        reg_operand->register_access.count = 2;
+    }
+
+    if (has_field_flags & (1 << IBitFieldType_REG))
+    {
+        *reg_operand = (InstructionOperand){ .operand_type = InstructionOperandType_Register, .register_access = register_lookup[fields[IBitFieldType_REG]][w] };
+    }
+
+    if (has_field_flags & (1 << IBitFieldType_MOD))
+    {
+        if (mod == 0b11)
+        {
+            *mod_operand = (InstructionOperand){ .operand_type = InstructionOperandType_Register, .register_access = register_lookup[rm][w] };
+        }
+        else
+        {
+            mod_operand->operand_type = InstructionOperandType_Memory;
+            mod_operand->effective_address.segment = 0;
+            mod_operand->effective_address.displacement = disp;
+
+            if (mod == 0b00 && rm == 0b110)
+                mod_operand->effective_address.base = EffectiveAddressBase_direct;
+            else
+                mod_operand->effective_address.base = rm + 1;
+        }
+    }
+
+    InstructionOperand* last_operand = &ret_inst.operands[(ret_inst.operands[0].operand_type != InstructionOperandType_None)];
+
+    if (has_relative_jump_displacement)
+    {
+        last_operand->operand_type = InstructionOperandType_Immediate;
+        last_operand->immediate_signed = disp + ret_inst.size;
+    }
+
+    if (has_data)
+    {
+        last_operand->operand_type = InstructionOperandType_Immediate;
+        last_operand->immediate_unsigned = data;
+    }
+
+    if (has_field_flags & (1 << IBitFieldType_V))
+    {
+        if (v)
+        {
+            last_operand->operand_type = InstructionOperandType_Register;
+            last_operand->register_access.reg_index = RegisterIndex_c;
+            last_operand->register_access.offset = 0;
+            last_operand->register_access.count = 1;
+        }
+        else
+        {
+            last_operand->operand_type = InstructionOperandType_Immediate;
+            last_operand->immediate_signed = 1;
+        }
+    }
+
+    return ret_inst;
 }
 
-// 0bxxxxxxxw(1) mod(2)xxxr/m(3) {disp-low} {disp-high} data-low {data-high}
-static int32 _inst_decode_non_arithm_imm_to_mem_reg(const char* op, Byte* data, uint32 remaining_size)
+void decoder_init()
 {
-	Byte byte1 = data[0];
-	Byte byte2 = data[1];
-	uint32 bytes_read = 2;
+    _Static_assert(array_count(instruction_layouts) < invalid_instruction_layout_id, "Instruction layout count exceeded invalid instruction id value.");
+    memset(instruction_layout_lookup, 0xFFFFFFFF, sizeof(instruction_layout_lookup));
 
-	bool8 w = byte1 & 1;
+    for(uint8 layout_i = 0; layout_i < array_count(instruction_layouts); layout_i++)
+    {
+        InstructionLayout layout = instruction_layouts[layout_i];
+        uint8 min_first_byte = 0;
 
-	uint8 mod_field = byte2 >> 6;
-	uint8 rm_field = byte2 & 0b111;
+        uint8 bit_index = 0;
+        uint8 field_i = 0;
+        bool8 use_secondary_lookup = false;
+        uint8 sec_lookup_index = 0;
+        uint8 variable_first_byte_fields_size = 0;
+        uint8 variable_first_byte_fields_shift = 0;
+        while (field_i < array_count(layout.fields) && layout.fields[field_i].type != IBitFieldType_None)
+        {
+            IBitField field = layout.fields[field_i];
+            if (bit_index < 8)
+            {
+                min_first_byte <<= field.size;
 
-	char src_s[32];
-	char dest_s[32];
+                if (field.type == IBitFieldType_Static)
+                {
+                    min_first_byte |= field.value;
+                    variable_first_byte_fields_shift += field.size;
+                }
+                else
+                {
+                    variable_first_byte_fields_shift = 0;
+                    variable_first_byte_fields_size += field.size;
+                }
+            }
 
-	// Register Mode
-	if (mod_field == 0b11)
-	{
-		sprintf_s(dest_s, sizeof(dest_s), "%s", register_name_lookup[rm_field][w]);
-	}
-	// Direct Address Mem Mode
-	else if ((!mod_field) * (rm_field == 0b110))
-	{
-		sprintf_s(dest_s, sizeof(dest_s), "[%hu]", *((Word*)&data[bytes_read]));
-		bytes_read += 2;
-	}
-	// Mem Mode w/o Displacement
-	else if (!mod_field)
-	{
-		sprintf_s(dest_s, sizeof(dest_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
-	}
-	// Mem Mode with Displacement
-	else
-	{
-		int32 displacement_value;
-		if (mod_field == 0b01)
-			displacement_value = (int8)data[bytes_read];
-		else
-			displacement_value = *((int16*)&data[bytes_read]);
+            instruction_layouts[layout_i].fields[field_i].shift = 8 - (bit_index % 8) - field.size;
+            if (bit_index == 10 && field.type == IBitFieldType_Static)
+            {
+                use_secondary_lookup = true;
+                sec_lookup_index = field.value;
+            }
 
-		bytes_read += mod_field;
+            bit_index += field.size;
+            field_i++;
+        }
+        // Check if instruction layout size conforms to multiple of bytes
+        assert(bit_index % 8 == 0);
 
-		if (displacement_value)
-		{
-			const char* signs[2] = {"+", "-"};
-			const char* sign = signs[displacement_value < 0];
-
-			sprintf_s(dest_s, sizeof(dest_s), "[%s %s %i]", mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
-		}
-		else
-		{
-			sprintf_s(dest_s, sizeof(dest_s), "[%s]", mem_mode_rm_field_reg_lookup[rm_field]);
-		}
-	}
-
-	if(w)
-	{
-		Word imm = *((Word*)&data[bytes_read]);
-		sprintf_s(src_s, sizeof(src_s), "word %hu", imm);
-		bytes_read += 2;
-	}
-	else
-	{
-		Byte imm = data[bytes_read];
-		sprintf_s(src_s, sizeof(src_s), "byte %hhu", imm);
-		bytes_read += 1;
-	}
-
-	print_out("%s %s, %s\n", op, dest_s, src_s);
-
-	return bytes_read;
-}
-
-// 0bxxxxxxs(1)w(1) mod(2)xxxr/m(3) {disp-low} {disp-high} data-low {data-high}
-static int32 _inst_decode_arithm_imm_to_mem_reg(const char* op, Byte* data, uint32 remaining_size)
-{
-	Byte byte1 = data[0];
-	Byte byte2 = data[1];
-	uint32 bytes_read = 2;
-
-	bool8 s = (byte1 >> 1) & 1;
-	bool8 w = byte1 & 1;
-
-	uint8 mod_field = byte2 >> 6;
-	uint8 rm_field = byte2 & 0b111;
-
-	char src_s[32];
-	char dest_s[32];
-
-	static char mem_prefix_lookup[2][5] = {"byte", "word"};
-
-	// Register Mode
-	if (mod_field == 0b11)
-	{
-		sprintf_s(dest_s, sizeof(dest_s), "%s", register_name_lookup[rm_field][w]);
-	}
-	// Direct Address Mem Mode
-	else if ((!mod_field) * (rm_field == 0b110))
-	{
-		sprintf_s(dest_s, sizeof(dest_s), "%s [%hu]", mem_prefix_lookup[s], *((Word*)&data[bytes_read]));
-		bytes_read += 2;
-	}
-	// Mem Mode w/o Displacement
-	else if (!mod_field)
-	{
-		sprintf_s(dest_s, sizeof(dest_s), "%s [%s]", mem_prefix_lookup[s], mem_mode_rm_field_reg_lookup[rm_field]);
-	}
-	// Mem Mode with Displacement
-	else
-	{
-		int32 displacement_value;
-		if (mod_field == 0b01)
-			displacement_value = (int8)data[bytes_read];
-		else
-			displacement_value = *((int16*)&data[bytes_read]);
-
-		bytes_read += mod_field;
-
-		if (displacement_value)
-		{
-			const char* signs[2] = {"+", "-"};
-			const char* sign = signs[displacement_value < 0];
-
-			sprintf_s(dest_s, sizeof(dest_s), "%s [%s %s %i]", mem_prefix_lookup[s], mem_mode_rm_field_reg_lookup[rm_field], sign, abs(displacement_value));
-		}
-		else
-		{
-			sprintf_s(dest_s, sizeof(dest_s), "%s [%s]", mem_prefix_lookup[s], mem_mode_rm_field_reg_lookup[rm_field]);
-		}
-	}
-
-	if(w && !s)
-	{
-		Word imm = *((Word*)&data[bytes_read]);
-		sprintf_s(src_s, sizeof(src_s), "%hu", imm);
-		bytes_read += 2;
-	}
-	else
-	{
-		Byte imm = data[bytes_read];
-		sprintf_s(src_s, sizeof(src_s), "%hhu", imm);
-		bytes_read += 1;
-	}
-
-	print_out("%s %s, %s\n", op, dest_s, src_s);
-
-	return bytes_read;
-}
-
-// 0b1011w(1)reg(3) data-low {data-high}
-static int32 _inst_mov_imm_to_reg(Byte* data, uint32 remaining_size)
-{
-	Byte byte1 = data[0];
-
-	bool8 w = (byte1 >> 3) & 1;
-	uint8 reg_field = byte1 & 0b111;
-	
-	if (w)
-	{
-		Word imm = *((Word*)&data[1]);
-		print_out("mov %s, %hu\n", register_name_lookup[reg_field][w], imm);
-		return 3;
-	}
-	else
-	{
-		Byte imm = data[1];
-		print_out("mov %s, %hhu\n", register_name_lookup[reg_field][w], imm);
-		return 2;
-	}
-}
-
-// 0b0000010w(1) data-low {data-high}
-static int32 _inst_decode_imm_to_acc(const char* op, Byte* data, uint32 remaining_size)
-{
-	Byte byte1 = data[0];
-
-	bool8 w = byte1 & 1;
-	
-	if (w)
-	{
-		Word imm = *((Word*)&data[1]);
-		print_out("%s ax, %hu\n", op, imm);
-		return 3;
-	}
-	else
-	{
-		Byte imm = data[1];
-		print_out("%s al, %hhu\n", op, imm);
-		return 2;
-	}
-}
-
-// 0b1010000w(1) addr-low addr-high
-static int32 _inst_mov_mem_to_acc(Byte* data, uint32 remaining_size)
-{
-	Byte byte1 = data[0];
-
-	bool8 w = byte1 & 1;
-	
-	if (w)
-	{
-		Word imm = *((Word*)&data[1]);
-		print_out("mov ax, [%hu]\n", imm);
-	}
-	else
-	{
-		Byte imm = data[1];
-		print_out("mov al, [%hhu]\n", imm);
-	}
-
-	return 3;
-}
-
-// 0b1010001w(1) addr-low addr-high
-static int32 _inst_mov_acc_to_mem(Byte* data, uint32 remaining_size)
-{
-	Byte byte1 = data[0];
-
-	bool8 w = byte1 & 1;
-	
-	if (w)
-	{
-		Word imm = *((Word*)&data[1]);
-		print_out("mov [%hu], ax\n", imm);
-	}
-	else
-	{
-		Byte imm = data[1];
-		print_out("mov [%hhu], al\n", imm);
-	}
-
-	return 3;
-}
-
-// 0b10001d(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
-static int32 _inst_mov_mem_reg_transfer(Byte* data, uint32 remaining_size)
-{
-	return _inst_decode_mem_reg_transfer("mov", data, remaining_size);
-}
-
-// 0b1100011w(1) mod(2)000r/m(3) {disp-low} {disp-high} data-low {data-high}
-static int32 _inst_mov_imm_to_mem_reg(Byte* data, uint32 remaining_size)
-{
-	return _inst_decode_non_arithm_imm_to_mem_reg("mov", data, remaining_size);
-}
-
-// 0bxxxxxxd(1)w(1) mod(2)reg(3)r/m(3) {disp-low} {disp-high}
-static int32 _inst_arithm_mem_reg_transfer(Byte* data, uint32 remaining_size)
-{
-	return _inst_decode_mem_reg_transfer(arithm_op_lookup[(data[0] >> 3) & 0b111], data, remaining_size);
-}
-
-// 0b100000s(1)w(1) mod(2)000r/m(3) {disp-low} {disp-high} data-low {data-high}
-static int32 _inst_arithm_imm_to_mem_reg(Byte* data, uint32 remaining_size)
-{
-	return _inst_decode_arithm_imm_to_mem_reg(arithm_op_lookup[(data[1] >> 3) & 0b111], data, remaining_size);
-}
-
-// 0bxxxxxxxw(1) data-low {data-high}
-static int32 _inst_arithm_imm_to_acc(Byte* data, uint32 remaining_size)
-{
-	return _inst_decode_imm_to_acc(arithm_op_lookup[(data[0] >> 3) & 0b111], data, remaining_size);
-}
-
-// 0bxxxxxxxx ip-inc8
-static int32 _inst_decode_conditional_jump(const char* op, Byte* data, uint32 remaining_size)
-{
-	int8 increment = *((int8*)&data[1]);
-	print_out("; %s %hhi\n", op, increment);
-	return 2;
-}
-
-#define cond_jmp_func(op) static int32 _inst_##op(Byte* data, uint32 remaining_size) { return _inst_decode_conditional_jump(#op, data, remaining_size); }
-
-cond_jmp_func(je);		//0b01110100
-cond_jmp_func(jl);		//0b01111100
-cond_jmp_func(jle);		//0b01111110
-cond_jmp_func(jb);		//0b01110010
-cond_jmp_func(jbe);		//0b01110110
-cond_jmp_func(jp);		//0b01111010
-cond_jmp_func(jo);		//0b01110000
-cond_jmp_func(js);		//0b01111000
-cond_jmp_func(jnz);		//0b01110101
-cond_jmp_func(jnl);		//0b01111101
-cond_jmp_func(jg);		//0b01111111
-cond_jmp_func(jnb);		//0b01110011
-cond_jmp_func(ja);		//0b01110111
-cond_jmp_func(jnp);		//0b01111011
-cond_jmp_func(jno);		//0b01110001
-cond_jmp_func(jns);		//0b01111001
-cond_jmp_func(loop);	//0b11100010
-cond_jmp_func(loopz);	//0b11100001
-cond_jmp_func(loopnz);	//0b11100000
-cond_jmp_func(jcxz);	//0b11100011
-
-void decoder_initialize_lookups()
-{
-	// mov
-	for (uint32 i = 0b10001000; i <= 0b10001011; i++) primary_instruction_lookup[i] = _inst_mov_mem_reg_transfer;
-	for (uint32 i = 0b11000110; i <= 0b11000111; i++) primary_instruction_lookup[i] = _inst_mov_imm_to_mem_reg;
-	for (uint32 i = 0b10110000; i <= 0b10111111; i++) primary_instruction_lookup[i] = _inst_mov_imm_to_reg;
-	for (uint32 i = 0b10100000; i <= 0b10100001; i++) primary_instruction_lookup[i] = _inst_mov_mem_to_acc;
-	for (uint32 i = 0b10100010; i <= 0b10100011; i++) primary_instruction_lookup[i] = _inst_mov_acc_to_mem;
-
-	// all arithmetic op
-	for (uint32 i = 0b10000000; i <= 0b10000011; i++) primary_instruction_lookup[i] = _inst_arithm_imm_to_mem_reg;
-	for (uint32 i = 0; i < sizeof(arithm_op_lookup) / sizeof(arithm_op_lookup[0]); i++)
-	{
-		uint32 op_id_mask = i << 3;
-		for (uint32 j = (0b00000000 | op_id_mask); j <= (0b00000011 | op_id_mask); j++) primary_instruction_lookup[j] = _inst_arithm_mem_reg_transfer;
-		for (uint32 j = (0b00000100 | op_id_mask); j <= (0b00000101 | op_id_mask); j++) primary_instruction_lookup[j] = _inst_arithm_imm_to_acc;
-	}
-
-	primary_instruction_lookup[0b01110100] = _inst_je;
-	primary_instruction_lookup[0b01111100] = _inst_jl;
-	primary_instruction_lookup[0b01111110] = _inst_jle;
-	primary_instruction_lookup[0b01110010] = _inst_jb;
-	primary_instruction_lookup[0b01110110] = _inst_jbe;
-	primary_instruction_lookup[0b01111010] = _inst_jp;
-	primary_instruction_lookup[0b01110000] = _inst_jo;
-	primary_instruction_lookup[0b01111000] = _inst_js;
-	primary_instruction_lookup[0b01110101] = _inst_jnz;
-	primary_instruction_lookup[0b01111101] = _inst_jnl;
-	primary_instruction_lookup[0b01111111] = _inst_jg;
-	primary_instruction_lookup[0b01110011] = _inst_jnb;
-	primary_instruction_lookup[0b01110111] = _inst_ja;
-	primary_instruction_lookup[0b01111011] = _inst_jnp;
-	primary_instruction_lookup[0b01110001] = _inst_jno;
-	primary_instruction_lookup[0b01111001] = _inst_jns;
-	primary_instruction_lookup[0b11100010] = _inst_loop;
-	primary_instruction_lookup[0b11100001] = _inst_loopz;
-	primary_instruction_lookup[0b11100000] = _inst_loopnz;
-	primary_instruction_lookup[0b11100011] = _inst_jcxz;
-}
-
-int32 decoder_decode_instruction(Byte* data, uint32 remaining_size)
-{
-	FP_parse_instruction parse_inst_func = primary_instruction_lookup[*data];
-	if (!parse_inst_func)
-		return -1;
-
-	return parse_inst_func(data, remaining_size);
+        for (uint8 variable_fields_value = 0; variable_fields_value <= (0xFF >> (8 - variable_first_byte_fields_size)); variable_fields_value++)
+        {
+            uint8 first_byte = min_first_byte | (variable_fields_value << variable_first_byte_fields_shift);
+            instruction_layout_lookup[first_byte].use_first_index = !use_secondary_lookup;
+            assert(sec_lookup_index < 8);
+            instruction_layout_lookup[first_byte].layout_indices[sec_lookup_index] = layout_i;
+        }
+    }
 }

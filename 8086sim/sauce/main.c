@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include "common.h"
-#include "decoder2.h"
+#include "decoder.h"
 #include "utils.h"
 
 typedef struct
@@ -57,11 +57,11 @@ int main(int argc, char** argv)
 	fread_s(read_buf.data, read_buf.size, read_buf.size, 1, in_binary_file);
 	fclose(in_binary_file);
 
-	decoder2_initialize_lookup();
+	decoder_init();
 	uint32 read_offset = 0;
 	while (read_offset < read_buf.size)
 	{
-		Instruction inst = decoder2_decode_instruction(&read_buf.data[read_offset], read_buf.size - read_buf.size);
+		Instruction inst = decoder_decode_instruction(&read_buf.data[read_offset], read_buf.size - read_buf.size);
 		if (inst.op_type == OpType_none)
 		{
 			print_out("Error: failed to read next instruction at offset %u.\n", read_offset);
