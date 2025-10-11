@@ -47,7 +47,7 @@ static bool8 _is_printable(Instruction inst)
     return ((inst.op_type == OpType_lock) || (inst.op_type == OpType_rep) || (inst.op_type == OpType_segment));
 }
 
-void print_instruction(Instruction inst, FILE* asm_file)
+void print_instruction(SimulatorContext* context, Instruction inst, FILE* asm_file)
 {
     InstructionFlags flags = inst.flags;
     bool8 w = (flags & InstructionFlag_Wide) > 0;
@@ -135,4 +135,23 @@ void print_instruction(Instruction inst, FILE* asm_file)
     }
 
     print_out("\n");
+}
+
+void print_registers_state(SimulatorContext* context)
+{
+    const char* header = 
+    "-----------------------------------------\n"
+    "        | Low   | High  | Wide          |\n";
+    printf(header);
+
+    for (uint8 reg_index = RegisterIndex_a; reg_index < RegisterIndex_Count; reg_index++)
+    {
+        Register reg = context->registers[reg_index];
+        const char* format =
+        "-----------------------------------------\n"
+        " %s\t| 0x%02hhx\t| 0x%02hhx\t| 0x%04hx\t|\n"
+        "-----------------------------------------\n";
+        printf(format, reg_name_lookup[reg_index][2], reg.low, reg.high, reg.wide);
+    }
+
 }

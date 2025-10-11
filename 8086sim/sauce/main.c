@@ -17,7 +17,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/old/listing_0041_add_sub_cmp_jnz";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0044_register_movs";
 	else
 		bin_filepath = argv[1];
 
@@ -71,9 +71,13 @@ int main(int argc, char** argv)
 			break;
 		}
 
-		print_instruction(inst, out_asm_file);
+		simulator_execute_instruction(&sim_context, inst);
+		print_instruction(&sim_context, inst, out_asm_file);
 		read_offset += inst.size;
 	}
+
+	printf("\n");
+	print_registers_state(&sim_context);
 
 	simulator_context_destroy(&sim_context);
 

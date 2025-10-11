@@ -110,17 +110,28 @@ typedef struct
 }
 Instruction;
 
-struct SimulatorContext_S;
-typedef bool8(*fp_execute_instruction)(struct SimulatorContext_S* context, Instruction inst);
-
-struct SimulatorContext_S
+typedef struct
 {
-    uint16 registers[RegisterIndex_Count];
+    union
+    {
+        uint16 wide;
+        struct
+        {
+            uint8 low;
+            uint8 high;
+        };
+        uint8 sub_reg[2];
+    };
+}
+Register;
+
+typedef struct
+{
+    Register registers[RegisterIndex_Count];
     uint32 memory_buffer_size;
     void* memory_buffer;
-    fp_execute_instruction execute_function_lookup[OpType_Count];
-};
-typedef struct SimulatorContext_S SimulatorContext;
+}
+SimulatorContext;
 
 void simulator_context_init(SimulatorContext* out_context);
 void simulator_context_destroy(SimulatorContext* context);
