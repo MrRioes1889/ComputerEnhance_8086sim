@@ -137,7 +137,7 @@ Instruction decoder_decode_instruction(Byte* read_ptr, uint32 remaining_size)
     int16 data = 0;
     uint8 data_size = has_data + (has_wide_data * has_data);
     if (data_size)
-        data = data_size == 2 ? *(uint16*)(&read_ptr[ret_inst.size]) : (uint8)read_ptr[ret_inst.size];
+        data = data_size == 2 ? *(uint16*)(&read_ptr[ret_inst.size]) : (int8)read_ptr[ret_inst.size];
     ret_inst.size += data_size;
 
     ret_inst.op_type = layout.op_type;
@@ -224,12 +224,11 @@ void decoder_init()
         uint8 min_first_byte = 0;
 
         uint8 bit_index = 0;
-        uint8 field_i = 0;
         bool8 use_secondary_lookup = false;
         uint8 sec_lookup_index = 0;
         uint8 variable_first_byte_fields_size = 0;
         uint8 variable_first_byte_fields_shift = 0;
-        while (field_i < array_count(layout.fields) && layout.fields[field_i].type != IBitFieldType_None)
+        for (uint8 field_i = 0; field_i < array_count(layout.fields) && layout.fields[field_i].type != IBitFieldType_None; field_i++)
         {
             IBitField field = layout.fields[field_i];
             if (bit_index < 8)
@@ -249,14 +248,13 @@ void decoder_init()
             }
 
             instruction_layouts[layout_i].fields[field_i].shift = 8 - (bit_index % 8) - field.size;
-            if (bit_index == 10 && field.type == IBitFieldType_Static)
+            if (bit_index == 10 && field.type == IBitFieldType_Static && field.size == 3)
             {
                 use_secondary_lookup = true;
                 sec_lookup_index = field.value;
             }
 
             bit_index += field.size;
-            field_i++;
         }
         // Check if instruction layout size conforms to multiple of bytes
         assert(bit_index % 8 == 0);

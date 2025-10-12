@@ -17,7 +17,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0044_register_movs";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0047_challenge_flags";
 	else
 		bin_filepath = argv[1];
 

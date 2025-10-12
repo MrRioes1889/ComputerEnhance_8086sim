@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "string.h"
 
 static char op_mnemonic_lookup[OpType_Count][8] =
 {
@@ -42,15 +43,31 @@ static char address_base_lookup[][6] =
 };
 static_assert(array_count(address_base_lookup) == EffectiveAddressBase_Count, "address base string lookup should cover all address bases");
 
+static void _append_char(char* buffer, uint32 buffer_size, char c)
+{
+    uint32 i = 0;
+    while(buffer[i]) i++;
+    if (i >= buffer_size - 1)
+        return;
+        
+    buffer[i] = c;
+    buffer[i+1] = 0;
+}
+
 static bool8 _is_printable(Instruction inst)
 {
-    return ((inst.op_type == OpType_lock) || (inst.op_type == OpType_rep) || (inst.op_type == OpType_segment));
+    return !((inst.op_type == OpType_lock) || (inst.op_type == OpType_rep) || (inst.op_type == OpType_segment));
 }
+
+static Register last_register_state[RegisterIndex_Count] = {0};
 
 void print_instruction(SimulatorContext* context, Instruction inst, FILE* asm_file)
 {
     InstructionFlags flags = inst.flags;
     bool8 w = (flags & InstructionFlag_Wide) > 0;
+
+    if (!_is_printable(inst))
+        return;
 
     if (flags & InstructionFlag_Lock)
     {
@@ -89,8 +106,8 @@ void print_instruction(SimulatorContext* context, Instruction inst, FILE* asm_fi
             {
                 RegisterAccess reg = operand.register_access;
                 print_out("%s", reg_name_lookup[reg.reg_index][reg.count == 2 ? 2 : reg.offset]);
+                break;
             } 
-            break;
 
             case InstructionOperandType_Memory:
             {
@@ -113,45 +130,92 @@ void print_instruction(SimulatorContext* context, Instruction inst, FILE* asm_fi
                         print_out("%+hd", address.displacement);
                     print_out("]");
                 }
+                break;
             }
-            break;
 
             case InstructionOperandType_Immediate:
             {
                 print_out("%hd", operand.immediate_signed);
+                break;
             }
-            break;
 
             case InstructionOperandType_RelativeImmediate:
             {
                 print_out("$%+hd", operand.immediate_signed);
+                break;
             }
-            break;
 
             default: 
-            {}
-            break;
+            {
+                break;
+            }
         }
     }
 
+    print_out(" ; ");
+    separator = "";
+    for (uint8 reg_index = RegisterIndex_a; reg_index < RegisterIndex_flags; reg_index++)
+    {
+        uint16 cur_reg_value = context->registers[reg_index].wide;
+        uint16 last_reg_value = last_register_state[reg_index].wide;
+        if (cur_reg_value == last_reg_value)
+            continue;
+
+        print_out("%s%s(0x%04hx -> 0x%04hx)", separator, reg_name_lookup[reg_index][2], last_reg_value, cur_reg_value);
+        separator = ", ";
+    }
+
+    uint16 cur_flags_value = context->registers[RegisterIndex_flags].wide;
+    uint16 last_flags_value = last_register_state[RegisterIndex_flags].wide;
+    if (cur_flags_value != last_flags_value)
+    {
+        const char flag_letter_lookup[17] = "C P A ZSTIDO    ";
+        char cur_flags_s[17] = "";
+        for (uint32 shift_i = 0; cur_flags_value; shift_i++, cur_flags_value >>= 1)
+        {
+            if (cur_flags_value & 1)
+                _append_char(cur_flags_s, 17, flag_letter_lookup[shift_i]);
+        }
+        char last_flags_s[17] = "";
+        for (uint32 shift_i = 0; last_flags_value; shift_i++, last_flags_value >>= 1)
+        {
+            if (last_flags_value & 1)
+                _append_char(last_flags_s, 17, flag_letter_lookup[shift_i]);
+        }
+
+        print_out("%sflags(%s -> %s)", separator, last_flags_s, cur_flags_s);
+    }
     print_out("\n");
+
+    memcpy_s(last_register_state, sizeof(last_register_state), context->registers, sizeof(context->registers));
 }
 
 void print_registers_state(SimulatorContext* context)
 {
     const char* header = 
     "-----------------------------------------\n"
-    "        | Low   | High  | Wide          |\n";
+    "        | Low   | High  | Wide          | Flags:\n";
     printf(header);
 
-    for (uint8 reg_index = RegisterIndex_a; reg_index < RegisterIndex_Count; reg_index++)
+    uint16 flags = context->registers[RegisterIndex_flags].wide;
+    char flag_rows[9][32] = {0};
+
+    sprintf_s(flag_rows[0], 32, " Carry: %hhu\n", ((flags & (1 << StatusFlagIndex_Carry)) > 0));
+    sprintf_s(flag_rows[1], 32, " Parity: %hhu\n", ((flags & (1 << StatusFlagIndex_Parity)) > 0));
+    sprintf_s(flag_rows[2], 32, " AuxCarry: %hhu\n", ((flags & (1 << StatusFlagIndex_AuxCarry)) > 0));
+    sprintf_s(flag_rows[3], 32, " Zero: %hhu\n", ((flags & (1 << StatusFlagIndex_Zero)) > 0));
+    sprintf_s(flag_rows[4], 32, " Sign: %hhu\n", ((flags & (1 << StatusFlagIndex_Sign)) > 0));
+    sprintf_s(flag_rows[5], 32, " Trap: %hhu\n", ((flags & (1 << StatusFlagIndex_Trap)) > 0));
+    sprintf_s(flag_rows[6], 32, " InterruptEnable: %hhu\n", ((flags & (1 << StatusFlagIndex_InterruptEnable)) > 0));
+    sprintf_s(flag_rows[7], 32, " Direction: %hhu\n", ((flags & (1 << StatusFlagIndex_Direction)) > 0));
+    sprintf_s(flag_rows[8], 32, " Overflow: %hhu\n", ((flags & (1 << StatusFlagIndex_Overflow)) > 0));
+
+    for (uint8 reg_index = RegisterIndex_a, line_i = 0; reg_index < RegisterIndex_Count; reg_index++)
     {
         Register reg = context->registers[reg_index];
-        const char* format =
-        "-----------------------------------------\n"
-        " %s\t| 0x%02hhx\t| 0x%02hhx\t| 0x%04hx\t|\n"
-        "-----------------------------------------\n";
-        printf(format, reg_name_lookup[reg_index][2], reg.low, reg.high, reg.wide);
+        printf("-----------------------------------------%s", line_i < 9 ? flag_rows[line_i++] : "\n");
+        printf(" %s\t| 0x%02hhx\t| 0x%02hhx\t| 0x%04hx\t|%s",reg_name_lookup[reg_index][2], reg.low, reg.high, reg.wide, line_i < 9 ? flag_rows[line_i++] : "\n");
     }
+    printf("-----------------------------------------\n");
 
 }

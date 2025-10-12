@@ -133,6 +133,20 @@ typedef struct
 }
 SimulatorContext;
 
+enum
+{
+    StatusFlagIndex_Carry = 0,
+    StatusFlagIndex_Parity = 2,
+    StatusFlagIndex_AuxCarry = 4,
+    StatusFlagIndex_Zero = 6,
+    StatusFlagIndex_Sign = 7,
+    StatusFlagIndex_Trap = 8,
+    StatusFlagIndex_InterruptEnable = 9,
+    StatusFlagIndex_Direction = 10,
+    StatusFlagIndex_Overflow = 11,
+};
+typedef uint16 StatusFlagIndex;
+
 void simulator_context_init(SimulatorContext* out_context);
 void simulator_context_destroy(SimulatorContext* context);
 

@@ -18,6 +18,10 @@ typedef uint16_t Word;
 #pragma warning(disable : 4100)
 #pragma warning(disable : 4101)
 #pragma warning(disable : 4189)
+#define unreachable() __assume(0)
+
+#else
+#define unreachable() __builtin_unreachable()
 #endif
 
 #define false 0
