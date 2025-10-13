@@ -4,15 +4,6 @@
 #include "decoder.h"
 #include "utils.h"
 
-typedef struct
-{
-	Byte* data;
-	uint32 size;
-}
-FileBuffer;
-
-static FILE* out_asm_file = 0;
-
 int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
@@ -21,41 +12,21 @@ int main(int argc, char** argv)
 	else
 		bin_filepath = argv[1];
 
-	FILE* in_binary_file = fopen(bin_filepath, "rb");
-	if(!in_binary_file)
+	FileBuffer read_buf = {0};
+	if (!read_file_to_buffer(bin_filepath, &read_buf))
 	{
-		perror("Error");
 		printf_s("Failed to read file %s", bin_filepath);
 		return 1;
 	}
 
-	const char* out_asm_filepath = "out.asm";
-	out_asm_file = fopen(out_asm_filepath, "w");
-	if(!out_asm_file)
+	const char* asm_filename = "out.asm";
+	if (!asm_file_open(asm_filename))
 	{
-		perror("Error");
-		printf_s("Failed to write to file %s", out_asm_filepath);
-		return 2;
-	}
-	fprintf_s(out_asm_file, "; 8086 disassembly for file: \"%s\"\n\nbits 16\n\n", bin_filepath);
-	fclose(out_asm_file);
-
-	out_asm_file = fopen(out_asm_filepath, "a");
-	if(!out_asm_file)
-	{
-		perror("Error");
-		printf_s("Failed to open file for appending %s", out_asm_filepath);
-		return 3;
+		printf_s("Failed to open file for writing: %s", asm_filename);
+		return 1;
 	}
 
-	FileBuffer read_buf = {0};
-	fseek(in_binary_file, 0, SEEK_END);
-	read_buf.size = ftell(in_binary_file);
-	rewind(in_binary_file);
-	read_buf.data = malloc(read_buf.size);
-
-	fread_s(read_buf.data, read_buf.size, read_buf.size, 1, in_binary_file);
-	fclose(in_binary_file);
+	print_out("; 8086 disassembly for file: \"%s\"\n\nbits 16\n\n", bin_filepath);
 
 	SimulatorContext sim_context = {0};
 	simulator_context_init(&sim_context);
@@ -72,7 +43,7 @@ int main(int argc, char** argv)
 		}
 
 		simulator_execute_instruction(&sim_context, inst);
-		print_instruction(&sim_context, inst, out_asm_file);
+		print_instruction(&sim_context, inst);
 		read_offset += inst.size;
 	}
 
@@ -81,20 +52,7 @@ int main(int argc, char** argv)
 
 	simulator_context_destroy(&sim_context);
 
-	fclose(out_asm_file);
 	free(read_buf.data);
 	printf_s("Done!\n");
 	return 0;
-}
-
-void print_out(const char* format, ...)
-{
-	char line_buf[64];
-	va_list args;
-	va_start(args, format);
-	vsprintf_s(line_buf, sizeof(line_buf), format, args);
-	va_end(args);
-
-	printf_s(line_buf);
-	fprintf_s(out_asm_file, line_buf);
 }

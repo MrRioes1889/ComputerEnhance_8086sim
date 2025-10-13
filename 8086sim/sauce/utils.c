@@ -1,5 +1,65 @@
 #include "utils.h"
-#include "string.h"
+#include <string.h>
+#include <malloc.h>
+#include <stdio.h>
+
+bool8 read_file_to_buffer(const char* filepath, FileBuffer* out_buffer)
+{
+	FILE* file = fopen(filepath, "rb");
+	if(!file)
+	{
+		perror("Error");
+		return false;
+	}
+
+	fseek(file, 0, SEEK_END);
+	out_buffer->size = ftell(file);
+	rewind(file);
+	out_buffer->data = malloc(out_buffer->size);
+
+	fread_s(out_buffer->data, out_buffer->size, out_buffer->size, 1, file);
+	fclose(file);
+    return true;
+}
+
+static FILE* out_asm_file = 0;
+
+bool8 asm_file_open(const char* filepath)
+{
+    out_asm_file = fopen(filepath, "w");
+    if(!out_asm_file)
+    {
+        perror("Error");
+        return false;
+    }
+    fclose(out_asm_file);
+
+    out_asm_file = fopen(filepath, "a");
+    if(!out_asm_file)
+    {
+        perror("Error");
+        return false;
+    }
+
+    return true;
+}
+
+void asm_file_close()
+{
+    fclose(out_asm_file);
+}
+
+void print_out(const char* format, ...)
+{
+	char line_buf[128];
+	va_list args;
+	va_start(args, format);
+	vsprintf_s(line_buf, sizeof(line_buf), format, args);
+	va_end(args);
+
+	printf_s(line_buf);
+	fprintf_s(out_asm_file, line_buf);
+}
 
 static char op_mnemonic_lookup[OpType_Count][8] =
 {
@@ -61,7 +121,7 @@ static bool8 _is_printable(Instruction inst)
 
 static Register last_register_state[RegisterIndex_Count] = {0};
 
-void print_instruction(SimulatorContext* context, Instruction inst, FILE* asm_file)
+void print_instruction(SimulatorContext* context, Instruction inst)
 {
     InstructionFlags flags = inst.flags;
     bool8 w = (flags & InstructionFlag_Wide) > 0;
@@ -219,3 +279,4 @@ void print_registers_state(SimulatorContext* context)
     printf("-----------------------------------------\n");
 
 }
+
