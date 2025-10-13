@@ -138,7 +138,7 @@ static bool8 _execute_add(SimulatorContext* context, Instruction inst)
 
     _update_status_flag(context, StatusFlagIndex_Carry, (new_dest_value < orig_dest_value));
     bool8 parity = true;
-    for (uint16 value = new_dest_value; value; value = value >> 1)
+    for (uint16 value = new_dest_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
         parity = (value & 1) ? !parity : parity;
     _update_status_flag(context, StatusFlagIndex_Parity, parity);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
@@ -191,7 +191,7 @@ static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
 
     _update_status_flag(context, StatusFlagIndex_Carry, (new_dest_value > orig_dest_value));
     bool8 parity = true;
-    for (uint16 value = new_dest_value; value; value = value >> 1)
+    for (uint16 value = new_dest_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
         parity = (value & 1) ? !parity : parity;
     _update_status_flag(context, StatusFlagIndex_Parity, parity);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
@@ -242,7 +242,7 @@ static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
 
     _update_status_flag(context, StatusFlagIndex_Carry, (dest_value > cmp_value));
     bool8 parity = true;
-    for (uint16 value = cmp_value; value; value = value >> 1)
+    for (uint16 value = cmp_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
         parity = (value & 1) ? !parity : parity;
     _update_status_flag(context, StatusFlagIndex_Parity, parity);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
