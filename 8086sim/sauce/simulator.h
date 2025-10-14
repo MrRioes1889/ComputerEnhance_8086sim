@@ -129,7 +129,9 @@ typedef struct
 {
     Register registers[RegisterIndex_Count];
     uint32 memory_buffer_size;
-    void* memory_buffer;
+    Byte* memory_buffer;
+    uint32 instruction_buffer_offset;
+    uint32 instruction_buffer_size;
 }
 SimulatorContext;
 
@@ -147,7 +149,7 @@ enum
 };
 typedef uint16 StatusFlagIndex;
 
-void simulator_context_init(SimulatorContext* out_context);
+bool8 simulator_context_init(SimulatorContext* out_context, const char* bin_filepath);
 void simulator_context_destroy(SimulatorContext* context);
 
 bool8 simulator_execute_instruction(SimulatorContext* context, Instruction inst);

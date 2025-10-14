@@ -1,7 +1,8 @@
 #include "simulator.h"
-#include "stdio.h"
+#include <stdio.h>
 #include <malloc.h>
 #include <string.h>
+#include <assert.h>
 
 typedef bool8(*fp_execute_instruction)(SimulatorContext* context, Instruction inst);
 static fp_execute_instruction execute_function_lookup[OpType_Count] = {0};
@@ -254,7 +255,43 @@ static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
     return true;
 }
 
-void simulator_context_init(SimulatorContext* out_context)
+static bool8 _execute_jz(SimulatorContext* context, Instruction inst)
+{
+    uint16 flags = context->registers[RegisterIndex_flags].wide;
+    if (flags & (1 << StatusFlagIndex_Zero)) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    return true;
+}
+
+static bool8 _execute_jnz(SimulatorContext* context, Instruction inst)
+{
+    uint16 flags = context->registers[RegisterIndex_flags].wide;
+    if (!(flags & (1 << StatusFlagIndex_Zero))) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    return true;
+}
+
+static bool8 _execute_jp(SimulatorContext* context, Instruction inst)
+{
+    uint16 flags = context->registers[RegisterIndex_flags].wide;
+    if (flags & (1 << StatusFlagIndex_Parity)) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    return true;
+}
+
+static bool8 _execute_jb(SimulatorContext* context, Instruction inst)
+{
+    uint16 flags = context->registers[RegisterIndex_flags].wide;
+    if (flags & (1 << StatusFlagIndex_Carry)) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    return true;
+}
+
+static bool8 _execute_loopnz(SimulatorContext* context, Instruction inst)
+{
+    context->registers[RegisterIndex_c].wide--;
+    uint16 flags = context->registers[RegisterIndex_flags].wide;
+    if (context->registers[RegisterIndex_c].wide > 0 && !(flags & (1 << StatusFlagIndex_Zero))) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    return true;
+}
+
+bool8 simulator_context_init(SimulatorContext* out_context, const char* bin_filepath)
 {
     memset(out_context->registers, 0, sizeof(out_context->registers));
     out_context->memory_buffer_size = 1024 * 1024;
@@ -265,6 +302,29 @@ void simulator_context_init(SimulatorContext* out_context)
     execute_function_lookup[OpType_add] = _execute_add;
     execute_function_lookup[OpType_sub] = _execute_sub;
     execute_function_lookup[OpType_cmp] = _execute_cmp;
+    execute_function_lookup[OpType_jz] = _execute_jz;
+    execute_function_lookup[OpType_jnz] = _execute_jnz;
+    execute_function_lookup[OpType_jp] = _execute_jp;
+    execute_function_lookup[OpType_jb] = _execute_jb;
+    execute_function_lookup[OpType_loopnz] = _execute_loopnz;
+
+	FILE* file = fopen(bin_filepath, "rb");
+	if(!file)
+	{
+		perror("Error");
+		return false;
+	}
+
+	fseek(file, 0, SEEK_END);
+	out_context->instruction_buffer_size = ftell(file);
+	rewind(file);
+    assert(out_context->instruction_buffer_size < 0xFFFF);
+
+    out_context->instruction_buffer_offset = 0;
+	fread_s(&out_context->memory_buffer[out_context->instruction_buffer_offset], out_context->instruction_buffer_size, out_context->instruction_buffer_size, 1, file);
+	fclose(file);
+
+    return true;
 }
 
 void simulator_context_destroy(SimulatorContext* context)
