@@ -15,61 +15,27 @@ static void _update_status_flag(SimulatorContext* context, StatusFlagIndex flag_
         context->registers[RegisterIndex_flags].wide &= ~(1 << flag_index);
 }
 
-static bool8 _execute_mov(SimulatorContext* context, Instruction inst)
+static Byte* _get_memory_ptr(SimulatorContext* context, EffectiveAddress address)
 {
-    bool8 w = (inst.flags & InstructionFlag_Wide) > 0;
-
-    uint16 value = 0;
-    InstructionOperand src_operand = inst.operands[1];
-    switch (src_operand.operand_type)
+    uint16 offset = 0;
+    switch(address.base)
     {
-        case InstructionOperandType_Register:
-        {
-            RegisterAccess acc = src_operand.register_access;
-            Register reg = context->registers[acc.reg_index];
-            value = acc.count == 2 ? reg.wide : reg.sub_reg[acc.offset];
-            break;
-        }
-
-        case InstructionOperandType_Immediate:
-        {
-            value = src_operand.immediate_unsigned;
-            break;
-        }
-
-        default:
-        {
-            printf("Error: invalid source operand type.\n");
-            return false;
-        }
+        case EffectiveAddressBase_bp: offset += context->registers[RegisterIndex_bp].wide; break;
+        case EffectiveAddressBase_bp_di: offset += context->registers[RegisterIndex_bp].wide + context->registers[RegisterIndex_di].wide; break;
+        case EffectiveAddressBase_bp_si: offset += context->registers[RegisterIndex_bp].wide + context->registers[RegisterIndex_si].wide; break;
+        case EffectiveAddressBase_bx: offset += context->registers[RegisterIndex_b].wide; break;
+        case EffectiveAddressBase_bx_di: offset += context->registers[RegisterIndex_b].wide + context->registers[RegisterIndex_di].wide; break;
+        case EffectiveAddressBase_bx_si: offset += context->registers[RegisterIndex_b].wide + context->registers[RegisterIndex_si].wide; break;
+        case EffectiveAddressBase_di: offset += context->registers[RegisterIndex_di].wide; break;
+        case EffectiveAddressBase_si: context->registers[RegisterIndex_si].wide; break;
+        default: break;
     }
 
-    InstructionOperand dst_operand = inst.operands[0];
-    switch (dst_operand.operand_type)
-    {
-        case InstructionOperandType_Register:
-        {
-            RegisterAccess acc = dst_operand.register_access;
-            Register* reg = &context->registers[acc.reg_index];
-            if (acc.count == 2)
-                reg->wide = value;
-            else
-                reg->sub_reg[acc.offset] = (uint8)value;
-
-            break;
-        }
-
-        default:
-        {
-            printf("Error: Invalid dest operand type.\n");
-            return false;
-        }
-    }
-
-    return true;
+    offset += address.displacement;
+    return &context->memory_buffer[offset];
 }
 
-static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand src_operand)
+static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand src_operand, bool8 wide)
 {
     uint16 src_value = 0;
     switch (src_operand.operand_type)
@@ -78,13 +44,20 @@ static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand s
         {
             RegisterAccess acc = src_operand.register_access;
             Register reg = context->registers[acc.reg_index];
-            src_value = acc.count == 2 ? reg.wide : reg.sub_reg[acc.offset];
+            src_value = wide ? reg.wide : reg.sub_reg[acc.offset];
             break;
         }
 
         case InstructionOperandType_Immediate:
         {
             src_value = src_operand.immediate_unsigned;
+            break;
+        }
+
+        case InstructionOperandType_Memory:
+        {
+            Byte* src_ptr = _get_memory_ptr(context, src_operand.effective_address);
+            src_value = wide ? *((uint16*)src_ptr) : src_ptr[0];
             break;
         }
 
@@ -98,35 +71,26 @@ static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand s
     return src_value;
 }
 
-static bool8 _execute_add(SimulatorContext* context, Instruction inst)
+static bool8 _extract_dest_ref(SimulatorContext* context, InstructionOperand dst_operand, Byte** out_dest_ptr, uint8* out_dest_offset)
 {
-    uint16 src_value = _extract_src_value(context, inst.operands[1]);
+    *out_dest_offset = 0;
+    *out_dest_ptr = 0;
 
-    uint8 dest_size = 0;
-    uint16 orig_dest_value = 0;
-    uint16 new_dest_value = 0;
-
-    InstructionOperand dst_operand = inst.operands[0];
     switch (dst_operand.operand_type)
     {
         case InstructionOperandType_Register:
         {
             RegisterAccess acc = dst_operand.register_access;
             Register* reg = &context->registers[acc.reg_index];
-            dest_size = acc.count;
-            if (acc.count == 2)
-            {
-                orig_dest_value = reg->wide;
-                reg->wide += src_value;
-                new_dest_value = reg->wide;
-            }
-            else
-            {
-                orig_dest_value = reg->sub_reg[acc.offset];
-                reg->sub_reg[acc.offset] += (uint8)src_value;
-                new_dest_value = reg->sub_reg[acc.offset];
-            }
+            *out_dest_ptr = reg->sub_reg;
+            *out_dest_offset = acc.offset;
+            break;
+        }
 
+        case InstructionOperandType_Memory:
+        {
+            *out_dest_ptr = _get_memory_ptr(context, dst_operand.effective_address);
+            *out_dest_offset = 0;
             break;
         }
 
@@ -135,6 +99,50 @@ static bool8 _execute_add(SimulatorContext* context, Instruction inst)
             printf("Error: Invalid dest operand type.\n");
             return false;
         }
+    }
+
+    return true;
+}
+
+static bool8 _execute_mov(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
+
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+
+    if (wide)
+        *((uint16*)dest_ptr) = src_value;
+    else
+        dest_ptr[dest_offset] = (uint8)src_value;
+
+    return true;
+}
+
+static bool8 _execute_add(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
+
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+
+    uint16 orig_dest_value = 0;
+    uint16 new_dest_value = 0;
+    if (wide)
+    {
+        orig_dest_value = *((uint16*)dest_ptr);
+        *((uint16*)dest_ptr) += src_value;
+        new_dest_value = *((uint16*)dest_ptr);
+    }
+    else
+    {
+        orig_dest_value = dest_ptr[dest_offset];
+        dest_ptr[dest_offset] += (uint8)src_value;
+        new_dest_value = dest_ptr[dest_offset];
     }
 
     _update_status_flag(context, StatusFlagIndex_Carry, (new_dest_value < orig_dest_value));
@@ -144,7 +152,7 @@ static bool8 _execute_add(SimulatorContext* context, Instruction inst)
     _update_status_flag(context, StatusFlagIndex_Parity, parity);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
     _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
-    uint8 highest_bit_shift = (8 * dest_size) - 1;
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
     _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
 
@@ -153,41 +161,26 @@ static bool8 _execute_add(SimulatorContext* context, Instruction inst)
 
 static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
 {
-    uint16 src_value = _extract_src_value(context, inst.operands[1]);
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
 
-    uint8 dest_size = 0;
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+
     uint16 orig_dest_value = 0;
     uint16 new_dest_value = 0;
-
-    InstructionOperand dst_operand = inst.operands[0];
-    switch (dst_operand.operand_type)
+    if (wide)
     {
-        case InstructionOperandType_Register:
-        {
-            RegisterAccess acc = dst_operand.register_access;
-            Register* reg = &context->registers[acc.reg_index];
-            dest_size = acc.count;
-            if (acc.count == 2)
-            {
-                orig_dest_value = reg->wide;
-                reg->wide -= src_value;
-                new_dest_value = reg->wide;
-            }
-            else
-            {
-                orig_dest_value = reg->sub_reg[acc.offset];
-                reg->sub_reg[acc.offset] -= (uint8)src_value;
-                new_dest_value = reg->sub_reg[acc.offset];
-            }
-
-            break;
-        }
-
-        default:
-        {
-            printf("Error: Invalid dest operand type.\n");
-            return false;
-        }
+        orig_dest_value = *((uint16*)dest_ptr);
+        *((uint16*)dest_ptr) -= src_value;
+        new_dest_value = *((uint16*)dest_ptr);
+    }
+    else
+    {
+        orig_dest_value = dest_ptr[dest_offset];
+        dest_ptr[dest_offset] -= (uint8)src_value;
+        new_dest_value = dest_ptr[dest_offset];
     }
 
     _update_status_flag(context, StatusFlagIndex_Carry, (new_dest_value > orig_dest_value));
@@ -197,7 +190,7 @@ static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
     _update_status_flag(context, StatusFlagIndex_Parity, parity);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
     _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
-    uint8 highest_bit_shift = (8 * dest_size) - 1;
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
     _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
 
@@ -206,39 +199,25 @@ static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
 
 static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
 {
-    uint16 src_value = _extract_src_value(context, inst.operands[1]);
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
 
-    uint8 dest_size = 0;
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+
     uint16 dest_value = 0;
     uint16 cmp_value = 0;
 
-    InstructionOperand dst_operand = inst.operands[0];
-    switch (dst_operand.operand_type)
+    if (wide)
     {
-        case InstructionOperandType_Register:
-        {
-            RegisterAccess acc = dst_operand.register_access;
-            Register* reg = &context->registers[acc.reg_index];
-            dest_size = acc.count;
-            if (acc.count == 2)
-            {
-                dest_value = reg->wide;
-                cmp_value = dest_value - src_value;
-            }
-            else
-            {
-                dest_value = reg->sub_reg[acc.offset];
-                cmp_value = dest_value - (uint8)src_value;
-            }
-
-            break;
-        }
-
-        default:
-        {
-            printf("Error: Invalid dest operand type.\n");
-            return false;
-        }
+        dest_value = *((uint16*)dest_ptr);
+        cmp_value = dest_value - src_value;
+    }
+    else
+    {
+        dest_value = dest_ptr[dest_offset];
+        cmp_value = dest_value - (uint8)src_value;
     }
 
     _update_status_flag(context, StatusFlagIndex_Carry, (dest_value > cmp_value));
@@ -248,7 +227,7 @@ static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
     _update_status_flag(context, StatusFlagIndex_Parity, parity);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
     _update_status_flag(context, StatusFlagIndex_Zero, (cmp_value == 0));
-    uint8 highest_bit_shift = (8 * dest_size) - 1;
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
     _update_status_flag(context, StatusFlagIndex_Sign, ((cmp_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (cmp_value >> highest_bit_shift) != (dest_value >> highest_bit_shift));
 

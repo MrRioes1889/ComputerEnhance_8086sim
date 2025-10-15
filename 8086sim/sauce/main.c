@@ -6,7 +6,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0050_challenge_jumps";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0053_add_loop_challenge";
 	else
 		bin_filepath = argv[1];
 
