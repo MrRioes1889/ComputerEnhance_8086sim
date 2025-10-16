@@ -66,7 +66,8 @@ enum
     InstructionOperandType_Register,
     InstructionOperandType_Memory,
     InstructionOperandType_Immediate,
-    InstructionOperandType_RelativeImmediate
+    InstructionOperandType_RelativeImmediate,
+    InstructionOperandType_Count
 };
 typedef uint8 InstructionOperandType;
 
@@ -128,10 +129,14 @@ Register;
 typedef struct
 {
     Register registers[RegisterIndex_Count];
-    uint32 memory_buffer_size;
     Byte* memory_buffer;
+    uint32 memory_buffer_size;
     uint32 instruction_buffer_offset;
     uint32 instruction_buffer_size;
+
+    uint32 inst_cycle_counter; 
+    uint32 ea_cycle_counter; 
+    uint32 transfer_cycle_counter; 
 }
 SimulatorContext;
 

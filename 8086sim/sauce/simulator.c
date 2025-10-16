@@ -4,6 +4,26 @@
 #include <string.h>
 #include <assert.h>
 
+static uint8 ea_cycle_lookup[EffectiveAddressBase_Count][2] =
+{
+    [EffectiveAddressBase_direct] = {6, 6},
+    [EffectiveAddressBase_bp] = {5, 9},
+    [EffectiveAddressBase_bp_di] = {7, 11},
+    [EffectiveAddressBase_bp_si] = {8, 12},
+    [EffectiveAddressBase_bx] = {5, 9},
+    [EffectiveAddressBase_bx_di] = {8, 12},
+    [EffectiveAddressBase_bx_si] = {7, 11},
+    [EffectiveAddressBase_di] = {5, 9},
+    [EffectiveAddressBase_si] = {5, 9},
+};
+
+typedef struct
+{
+    uint8 inst_cycles;
+    uint8 transfer_count;
+}
+InstCycleLookupEntry;
+
 typedef bool8(*fp_execute_instruction)(SimulatorContext* context, Instruction inst);
 static fp_execute_instruction execute_function_lookup[OpType_Count] = {0};
 
@@ -15,7 +35,7 @@ static void _update_status_flag(SimulatorContext* context, StatusFlagIndex flag_
         context->registers[RegisterIndex_flags].wide &= ~(1 << flag_index);
 }
 
-static Byte* _get_memory_ptr(SimulatorContext* context, EffectiveAddress address)
+static uint16 _get_memory_offset(SimulatorContext* context, EffectiveAddress address)
 {
     uint16 offset = 0;
     switch(address.base)
@@ -32,10 +52,10 @@ static Byte* _get_memory_ptr(SimulatorContext* context, EffectiveAddress address
     }
 
     offset += address.displacement;
-    return &context->memory_buffer[offset];
+    return offset;
 }
 
-static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand src_operand, bool8 wide)
+static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand src_operand, bool8 wide, uint16* out_src_address)
 {
     uint16 src_value = 0;
     switch (src_operand.operand_type)
@@ -56,8 +76,12 @@ static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand s
 
         case InstructionOperandType_Memory:
         {
-            Byte* src_ptr = _get_memory_ptr(context, src_operand.effective_address);
+            uint16 mem_offset = _get_memory_offset(context, src_operand.effective_address);
+            *out_src_address = mem_offset;
+            Byte* src_ptr = &context->memory_buffer[mem_offset];
             src_value = wide ? *((uint16*)src_ptr) : src_ptr[0];
+            uint8 ea_cycles = ea_cycle_lookup[src_operand.effective_address.base][src_operand.effective_address.displacement != 0];
+            context->ea_cycle_counter += ea_cycles;
             break;
         }
 
@@ -71,7 +95,7 @@ static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand s
     return src_value;
 }
 
-static bool8 _extract_dest_ref(SimulatorContext* context, InstructionOperand dst_operand, Byte** out_dest_ptr, uint8* out_dest_offset)
+static bool8 _extract_dest_ref(SimulatorContext* context, InstructionOperand dst_operand, Byte** out_dest_ptr, uint8* out_dest_offset, uint16* out_dest_address)
 {
     *out_dest_offset = 0;
     *out_dest_ptr = 0;
@@ -89,8 +113,12 @@ static bool8 _extract_dest_ref(SimulatorContext* context, InstructionOperand dst
 
         case InstructionOperandType_Memory:
         {
-            *out_dest_ptr = _get_memory_ptr(context, dst_operand.effective_address);
+            uint16 mem_offset = _get_memory_offset(context, dst_operand.effective_address);
+            *out_dest_address = mem_offset;
+            *out_dest_ptr = &context->memory_buffer[mem_offset];
             *out_dest_offset = 0;
+            uint8 ea_cycles = ea_cycle_lookup[dst_operand.effective_address.base][dst_operand.effective_address.displacement != 0];
+            context->ea_cycle_counter += ea_cycles;
             break;
         }
 
@@ -107,16 +135,34 @@ static bool8 _extract_dest_ref(SimulatorContext* context, InstructionOperand dst
 static bool8 _execute_mov(SimulatorContext* context, Instruction inst)
 {
     bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
-    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
 
     Byte* dest_ptr = 0;
     uint8 dest_offset = 0;
-    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
 
     if (wide)
         *((uint16*)dest_ptr) = src_value;
     else
         dest_ptr[dest_offset] = (uint8)src_value;
+
+    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count][2] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {{.inst_cycles = 8, .transfer_count = 1}, {.inst_cycles = 10, .transfer_count = 1}},
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {{.inst_cycles = 2, .transfer_count = 0}, {0}},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {{.inst_cycles = 4, .transfer_count = 0}, {0}},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {{.inst_cycles = 9, .transfer_count = 1}, {.inst_cycles = 10, .transfer_count = 1}},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {{.inst_cycles = 10, .transfer_count = 1}, {0}},
+    };
+
+    bool8 acc_reg_mem_move = ((inst.operands[0].operand_type == InstructionOperandType_Register && inst.operands[0].register_access.reg_index == RegisterIndex_a) && inst.operands[1].operand_type == InstructionOperandType_Memory) ||
+                             (inst.operands[0].operand_type == InstructionOperandType_Memory && (inst.operands[1].operand_type == InstructionOperandType_Register && inst.operands[1].register_access.reg_index == RegisterIndex_a));
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type][acc_reg_mem_move];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
 
     return true;
 }
@@ -124,11 +170,12 @@ static bool8 _execute_mov(SimulatorContext* context, Instruction inst)
 static bool8 _execute_add(SimulatorContext* context, Instruction inst)
 {
     bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
-    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
 
     Byte* dest_ptr = 0;
     uint8 dest_offset = 0;
-    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
 
     uint16 orig_dest_value = 0;
     uint16 new_dest_value = 0;
@@ -156,17 +203,32 @@ static bool8 _execute_add(SimulatorContext* context, Instruction inst)
     _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
 
+    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 16, .transfer_count = 2},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 17, .transfer_count = 2},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
     return true;
 }
 
 static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
 {
     bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
-    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
 
     Byte* dest_ptr = 0;
     uint8 dest_offset = 0;
-    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
 
     uint16 orig_dest_value = 0;
     uint16 new_dest_value = 0;
@@ -194,17 +256,32 @@ static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
     _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
 
+    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 16, .transfer_count = 2},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 17, .transfer_count = 2},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
     return true;
 }
 
 static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
 {
     bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
-    uint16 src_value = _extract_src_value(context, inst.operands[1], wide);
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
 
     Byte* dest_ptr = 0;
     uint8 dest_offset = 0;
-    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset);
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
 
     uint16 dest_value = 0;
     uint16 cmp_value = 0;
@@ -231,34 +308,84 @@ static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
     _update_status_flag(context, StatusFlagIndex_Sign, ((cmp_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (cmp_value >> highest_bit_shift) != (dest_value >> highest_bit_shift));
 
+    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 10, .transfer_count = 1},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
     return true;
 }
 
 static bool8 _execute_jz(SimulatorContext* context, Instruction inst)
 {
     uint16 flags = context->registers[RegisterIndex_flags].wide;
-    if (flags & (1 << StatusFlagIndex_Zero)) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    if (flags & (1 << StatusFlagIndex_Zero))
+    {
+        context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+        context->inst_cycle_counter += 16;
+    }
+    else
+    {
+        context->inst_cycle_counter += 4;
+    }
+
     return true;
 }
 
 static bool8 _execute_jnz(SimulatorContext* context, Instruction inst)
 {
     uint16 flags = context->registers[RegisterIndex_flags].wide;
-    if (!(flags & (1 << StatusFlagIndex_Zero))) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    if (!(flags & (1 << StatusFlagIndex_Zero)))
+    {
+        context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+        context->inst_cycle_counter += 16;
+    }
+    else
+    {
+        context->inst_cycle_counter += 4;
+    }
+
     return true;
 }
 
 static bool8 _execute_jp(SimulatorContext* context, Instruction inst)
 {
     uint16 flags = context->registers[RegisterIndex_flags].wide;
-    if (flags & (1 << StatusFlagIndex_Parity)) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    if (flags & (1 << StatusFlagIndex_Parity)) 
+    {
+        context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+        context->inst_cycle_counter += 16;
+    }
+    else
+    {
+        context->inst_cycle_counter += 4;
+    }
+
     return true;
 }
 
 static bool8 _execute_jb(SimulatorContext* context, Instruction inst)
 {
     uint16 flags = context->registers[RegisterIndex_flags].wide;
-    if (flags & (1 << StatusFlagIndex_Carry)) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    if (flags & (1 << StatusFlagIndex_Carry)) 
+    {
+        context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+        context->inst_cycle_counter += 16;
+    }
+    else
+    {
+        context->inst_cycle_counter += 4;
+    }
+
     return true;
 }
 
@@ -266,7 +393,16 @@ static bool8 _execute_loopnz(SimulatorContext* context, Instruction inst)
 {
     context->registers[RegisterIndex_c].wide--;
     uint16 flags = context->registers[RegisterIndex_flags].wide;
-    if (context->registers[RegisterIndex_c].wide > 0 && !(flags & (1 << StatusFlagIndex_Zero))) context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+    if (context->registers[RegisterIndex_c].wide > 0 && !(flags & (1 << StatusFlagIndex_Zero))) 
+    {
+        context->registers[RegisterIndex_ip].wide += inst.operands[0].immediate_signed - inst.size;
+        context->inst_cycle_counter += 19;
+    }
+    else
+    {
+        context->inst_cycle_counter += 5;
+    }
+
     return true;
 }
 

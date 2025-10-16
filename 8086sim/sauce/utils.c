@@ -120,6 +120,9 @@ static bool8 _is_printable(Instruction inst)
 }
 
 static Register last_register_state[RegisterIndex_Count] = {0};
+static uint32 last_inst_cycle_counter = 0;
+static uint32 last_ea_cycle_counter = 0;
+static uint32 last_transfer_cycle_counter = 0;
 
 void print_instruction(SimulatorContext* context, Instruction inst)
 {
@@ -245,9 +248,20 @@ void print_instruction(SimulatorContext* context, Instruction inst)
 
         print_out("%sflags(%s -> %s)", separator, last_flags_s, cur_flags_s);
     }
+
+    print_out(" ; Total Estimated Cycles: %u (+%u", context->inst_cycle_counter + context->ea_cycle_counter + context->transfer_cycle_counter, context->inst_cycle_counter - last_inst_cycle_counter);
+    if (last_ea_cycle_counter != context->ea_cycle_counter) 
+        print_out(" + %uea", context->ea_cycle_counter - last_ea_cycle_counter);
+    if (last_transfer_cycle_counter != context->transfer_cycle_counter) 
+        print_out(" + %ut", context->transfer_cycle_counter - last_transfer_cycle_counter);
+    print_out(")");
+
     print_out("\n");
 
     memcpy_s(last_register_state, sizeof(last_register_state), context->registers, sizeof(context->registers));
+    last_inst_cycle_counter = context->inst_cycle_counter;
+    last_ea_cycle_counter = context->ea_cycle_counter;
+    last_transfer_cycle_counter = context->transfer_cycle_counter;
 }
 
 void print_registers_state(SimulatorContext* context)
