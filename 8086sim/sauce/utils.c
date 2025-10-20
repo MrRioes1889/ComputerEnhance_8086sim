@@ -165,6 +165,7 @@ void print_instruction(SimulatorContext* context, Instruction inst)
 
         switch(operand.operand_type)
         {
+            case InstructionOperandType_Accumulator:
             case InstructionOperandType_Register:
             {
                 RegisterAccess reg = operand.register_access;
@@ -176,7 +177,7 @@ void print_instruction(SimulatorContext* context, Instruction inst)
             {
                 EffectiveAddress address = operand.effective_address;
 
-                if (inst.operands[0].operand_type != InstructionOperandType_Register)
+                if (inst.operands[0].operand_type != InstructionOperandType_Register && inst.operands[0].operand_type != InstructionOperandType_Accumulator)
                     print_out("%s ", w ? "word" : "byte");
 
                 if (flags & InstructionFlag_Segment)

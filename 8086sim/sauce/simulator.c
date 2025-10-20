@@ -55,11 +55,26 @@ static uint16 _get_memory_offset(SimulatorContext* context, EffectiveAddress add
     return offset;
 }
 
+static void _update_parity_status_flag(SimulatorContext* context, uint16 dest_value)
+{
+    bool8 parity = true;
+    for (uint16 value = dest_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
+        parity = (value & 1) ? !parity : parity;
+    _update_status_flag(context, StatusFlagIndex_Parity, parity);
+}
+
+static void _update_sign_flag(SimulatorContext* context, uint16 dest_value, bool8 wide)
+{
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
+    _update_status_flag(context, StatusFlagIndex_Sign, ((dest_value >> highest_bit_shift) > 0));
+}
+
 static uint16 _extract_src_value(SimulatorContext* context, InstructionOperand src_operand, bool8 wide, uint16* out_src_address)
 {
     uint16 src_value = 0;
     switch (src_operand.operand_type)
     {
+        case InstructionOperandType_Accumulator:
         case InstructionOperandType_Register:
         {
             RegisterAccess acc = src_operand.register_access;
@@ -102,6 +117,7 @@ static bool8 _extract_dest_ref(SimulatorContext* context, InstructionOperand dst
 
     switch (dst_operand.operand_type)
     {
+        case InstructionOperandType_Accumulator:
         case InstructionOperandType_Register:
         {
             RegisterAccess acc = dst_operand.register_access;
@@ -147,19 +163,18 @@ static bool8 _execute_mov(SimulatorContext* context, Instruction inst)
     else
         dest_ptr[dest_offset] = (uint8)src_value;
 
-    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count][2] =
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
     {
-        [InstructionOperandType_Register][InstructionOperandType_Memory] = {{.inst_cycles = 8, .transfer_count = 1}, {.inst_cycles = 10, .transfer_count = 1}},
-        [InstructionOperandType_Register][InstructionOperandType_Register] = {{.inst_cycles = 2, .transfer_count = 0}, {0}},
-        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {{.inst_cycles = 4, .transfer_count = 0}, {0}},
-        [InstructionOperandType_Memory][InstructionOperandType_Register] = {{.inst_cycles = 9, .transfer_count = 1}, {.inst_cycles = 10, .transfer_count = 1}},
-        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {{.inst_cycles = 10, .transfer_count = 1}, {0}},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Memory] = {.inst_cycles = 10, .transfer_count = 1},
+        [InstructionOperandType_Memory][InstructionOperandType_Accumulator] = {.inst_cycles = 10, .transfer_count = 1},
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 2, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 8, .transfer_count = 1},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 10, .transfer_count = 1},
     };
 
-    bool8 acc_reg_mem_move = ((inst.operands[0].operand_type == InstructionOperandType_Register && inst.operands[0].register_access.reg_index == RegisterIndex_a) && inst.operands[1].operand_type == InstructionOperandType_Memory) ||
-                             (inst.operands[0].operand_type == InstructionOperandType_Memory && (inst.operands[1].operand_type == InstructionOperandType_Register && inst.operands[1].register_access.reg_index == RegisterIndex_a));
-
-    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type][acc_reg_mem_move];
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
     uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
     context->inst_cycle_counter += cycles.inst_cycles;
     context->transfer_cycle_counter += transfer_cycles;
@@ -193,23 +208,23 @@ static bool8 _execute_add(SimulatorContext* context, Instruction inst)
     }
 
     _update_status_flag(context, StatusFlagIndex_Carry, (new_dest_value < orig_dest_value));
-    bool8 parity = true;
-    for (uint16 value = new_dest_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
-        parity = (value & 1) ? !parity : parity;
-    _update_status_flag(context, StatusFlagIndex_Parity, parity);
+    _update_parity_status_flag(context, new_dest_value);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
     _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
     uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
     _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
 
-    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
     {
         [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
         [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
         [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 16, .transfer_count = 2},
         [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
         [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 17, .transfer_count = 2},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
     };
 
     InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
@@ -246,21 +261,19 @@ static bool8 _execute_sub(SimulatorContext* context, Instruction inst)
     }
 
     _update_status_flag(context, StatusFlagIndex_Carry, (new_dest_value > orig_dest_value));
-    bool8 parity = true;
-    for (uint16 value = new_dest_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
-        parity = (value & 1) ? !parity : parity;
-    _update_status_flag(context, StatusFlagIndex_Parity, parity);
+    _update_parity_status_flag(context, new_dest_value);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
     _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
     uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
     _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
 
-    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
     {
         [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
         [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
         [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 16, .transfer_count = 2},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
         [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
         [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 17, .transfer_count = 2},
     };
@@ -297,27 +310,261 @@ static bool8 _execute_cmp(SimulatorContext* context, Instruction inst)
         cmp_value = dest_value - (uint8)src_value;
     }
 
-    _update_status_flag(context, StatusFlagIndex_Carry, (dest_value > cmp_value));
-    bool8 parity = true;
-    for (uint16 value = cmp_value, bit_i = 0; value && bit_i < 8; value = value >> 1, bit_i++)
-        parity = (value & 1) ? !parity : parity;
-    _update_status_flag(context, StatusFlagIndex_Parity, parity);
+    _update_status_flag(context, StatusFlagIndex_Carry, (cmp_value > dest_value));
+    _update_parity_status_flag(context, cmp_value);
     _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
     _update_status_flag(context, StatusFlagIndex_Zero, (cmp_value == 0));
     uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
     _update_status_flag(context, StatusFlagIndex_Sign, ((cmp_value >> highest_bit_shift) > 0));
     _update_status_flag(context, StatusFlagIndex_Overflow, (cmp_value >> highest_bit_shift) != (dest_value >> highest_bit_shift));
 
-    static InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
     {
         [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
         [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
         [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 9, .transfer_count = 1},
         [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
         [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 10, .transfer_count = 1},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
     };
 
     InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
+    return true;
+}
+
+static bool8 _execute_test(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
+
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
+
+    uint16 dest_value = 0;
+    uint16 test_value = 0;
+
+    if (wide)
+    {
+        dest_value = *((uint16*)dest_ptr);
+        test_value = dest_value & src_value;
+    }
+    else
+    {
+        dest_value = dest_ptr[dest_offset];
+        test_value = dest_value & (uint8)src_value;
+    }
+
+    _update_status_flag(context, StatusFlagIndex_Carry, false);
+    _update_parity_status_flag(context, test_value);
+    _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
+    _update_status_flag(context, StatusFlagIndex_Zero, (test_value == 0));
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
+    _update_status_flag(context, StatusFlagIndex_Sign, ((test_value >> highest_bit_shift) > 0));
+    _update_status_flag(context, StatusFlagIndex_Overflow, false);
+
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 5, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 11, .transfer_count = 0},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
+    return true;
+}
+
+static bool8 _execute_xor(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
+
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
+
+    uint16 orig_dest_value = 0;
+    uint16 new_dest_value = 0;
+    if (wide)
+    {
+        orig_dest_value = *((uint16*)dest_ptr);
+        *((uint16*)dest_ptr) ^= src_value;
+        new_dest_value = *((uint16*)dest_ptr);
+    }
+    else
+    {
+        orig_dest_value = dest_ptr[dest_offset];
+        dest_ptr[dest_offset] ^= (uint8)src_value;
+        new_dest_value = dest_ptr[dest_offset];
+    }
+
+    _update_status_flag(context, StatusFlagIndex_Carry, false);
+    _update_parity_status_flag(context, new_dest_value);
+    _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
+    _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
+    _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
+    _update_status_flag(context, StatusFlagIndex_Overflow, false);
+
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Accumulator] = {.inst_cycles = 3, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Memory] = {.inst_cycles = 9, .transfer_count = 1},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 16, .transfer_count = 2},
+        [InstructionOperandType_Accumulator][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 4, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 17, .transfer_count = 2},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
+    return true;
+}
+
+static bool8 _execute_shr(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 mem_address = 0;
+    uint16 src_value = _extract_src_value(context, inst.operands[1], wide, &mem_address);
+
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
+
+    uint16 orig_dest_value = 0;
+    uint16 new_dest_value = 0;
+    if (wide)
+    {
+        orig_dest_value = *((uint16*)dest_ptr);
+        *((uint16*)dest_ptr) >>= src_value;
+        new_dest_value = *((uint16*)dest_ptr);
+    }
+    else
+    {
+        orig_dest_value = dest_ptr[dest_offset];
+        dest_ptr[dest_offset] >>= (uint8)src_value;
+        new_dest_value = dest_ptr[dest_offset];
+    }
+
+    _update_status_flag(context, StatusFlagIndex_Carry, (orig_dest_value >> (src_value - 1)) & 1);
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
+    _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
+
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][InstructionOperandType_Count] =
+    {
+        [InstructionOperandType_Register][InstructionOperandType_Immediate] = {.inst_cycles = 2, .transfer_count = 0},
+        [InstructionOperandType_Register][InstructionOperandType_Register] = {.inst_cycles = 8, .transfer_count = 0},
+        [InstructionOperandType_Memory][InstructionOperandType_Immediate] = {.inst_cycles = 15, .transfer_count = 2},
+        [InstructionOperandType_Memory][InstructionOperandType_Register] = {.inst_cycles = 20, .transfer_count = 2},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][inst.operands[1].operand_type];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles + (4 * src_value * (inst.operands[1].operand_type == InstructionOperandType_Register));
+    context->transfer_cycle_counter += transfer_cycles;
+
+    return true;
+}
+
+static bool8 _execute_inc(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 mem_address = 0;
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
+
+    uint16 orig_dest_value = 0;
+    uint16 new_dest_value = 0;
+    if (wide)
+    {
+        orig_dest_value = *((uint16*)dest_ptr);
+        *((uint16*)dest_ptr) += 1;
+        new_dest_value = *((uint16*)dest_ptr);
+    }
+    else
+    {
+        orig_dest_value = dest_ptr[dest_offset];
+        dest_ptr[dest_offset] += 1;
+        new_dest_value = dest_ptr[dest_offset];
+    }
+
+    _update_parity_status_flag(context, new_dest_value);
+    _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
+    _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
+    _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
+    _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
+
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][2] =
+    {
+        [InstructionOperandType_Register] = {{.inst_cycles = 3, .transfer_count = 0}, {.inst_cycles = 2, .transfer_count = 0}},
+        [InstructionOperandType_Memory] = {{.inst_cycles = 15, .transfer_count = 2}, {.inst_cycles = 15, .transfer_count = 2}},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][wide];
+    uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
+    context->inst_cycle_counter += cycles.inst_cycles;
+    context->transfer_cycle_counter += transfer_cycles;
+
+    return true;
+}
+
+static bool8 _execute_dec(SimulatorContext* context, Instruction inst)
+{
+    bool8 wide = (inst.flags & InstructionFlag_Wide) > 0;
+    uint16 mem_address = 0;
+    Byte* dest_ptr = 0;
+    uint8 dest_offset = 0;
+
+    _extract_dest_ref(context, inst.operands[0], &dest_ptr, &dest_offset, &mem_address);
+
+    uint16 orig_dest_value = 0;
+    uint16 new_dest_value = 0;
+    if (wide)
+    {
+        orig_dest_value = *((uint16*)dest_ptr);
+        *((uint16*)dest_ptr) -= 1;
+        new_dest_value = *((uint16*)dest_ptr);
+    }
+    else
+    {
+        orig_dest_value = dest_ptr[dest_offset];
+        dest_ptr[dest_offset] -= 1;
+        new_dest_value = dest_ptr[dest_offset];
+    }
+
+    _update_parity_status_flag(context, new_dest_value);
+    _update_status_flag(context, StatusFlagIndex_AuxCarry, false);
+    _update_status_flag(context, StatusFlagIndex_Zero, (new_dest_value == 0));
+    uint8 highest_bit_shift = (8 * (1 + wide)) - 1;
+    _update_status_flag(context, StatusFlagIndex_Sign, ((new_dest_value >> highest_bit_shift) > 0));
+    _update_status_flag(context, StatusFlagIndex_Overflow, (new_dest_value >> highest_bit_shift) != (orig_dest_value >> highest_bit_shift));
+
+    InstCycleLookupEntry inst_cycle_lookup[InstructionOperandType_Count][2] =
+    {
+        [InstructionOperandType_Register] = {{.inst_cycles = 3, .transfer_count = 0}, {.inst_cycles = 2, .transfer_count = 0}},
+        [InstructionOperandType_Memory] = {{.inst_cycles = 15, .transfer_count = 2}, {.inst_cycles = 15, .transfer_count = 2}},
+    };
+
+    InstCycleLookupEntry cycles = inst_cycle_lookup[inst.operands[0].operand_type][wide];
     uint8 transfer_cycles = wide * (mem_address & 1) * cycles.transfer_count * 4;
     context->inst_cycle_counter += cycles.inst_cycles;
     context->transfer_cycle_counter += transfer_cycles;
@@ -406,6 +653,15 @@ static bool8 _execute_loopnz(SimulatorContext* context, Instruction inst)
     return true;
 }
 
+static bool8 _execute_ret(SimulatorContext* context, Instruction inst)
+{
+    // NOTE: Only covering intra-segment ret for now
+    context->inst_cycle_counter += (inst.size == 1 ? 8 : 12);
+    context->transfer_cycle_counter += 4;
+
+    return true;
+}
+
 bool8 simulator_context_init(SimulatorContext* out_context, const char* bin_filepath)
 {
     memset(out_context->registers, 0, sizeof(out_context->registers));
@@ -422,6 +678,12 @@ bool8 simulator_context_init(SimulatorContext* out_context, const char* bin_file
     execute_function_lookup[OpType_jp] = _execute_jp;
     execute_function_lookup[OpType_jb] = _execute_jb;
     execute_function_lookup[OpType_loopnz] = _execute_loopnz;
+    execute_function_lookup[OpType_test] = _execute_test;
+    execute_function_lookup[OpType_xor] = _execute_xor;
+    execute_function_lookup[OpType_shr] = _execute_shr;
+    execute_function_lookup[OpType_inc] = _execute_inc;
+    execute_function_lookup[OpType_dec] = _execute_dec;
+    execute_function_lookup[OpType_ret] = _execute_ret;
 
 	FILE* file = fopen(bin_filepath, "rb");
 	if(!file)

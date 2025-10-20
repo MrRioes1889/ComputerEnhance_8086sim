@@ -66,7 +66,7 @@ typedef struct
 }
 LookupEntry;
 
-static LookupEntry instruction_layout_lookup[0xFF] = {0};
+static LookupEntry instruction_layout_lookup[0xFF + 1] = {0};
 
 #define invalid_instruction_layout_id 0xFF
 
@@ -118,6 +118,7 @@ Instruction decoder_decode_instruction(Byte* read_ptr, uint32 remaining_size)
 
     uint8 mod = fields[IBitFieldType_MOD];
     uint8 rm = fields[IBitFieldType_RM];
+    uint8 reg = fields[IBitFieldType_REG];
     uint8 w = fields[IBitFieldType_W];
     uint8 s = fields[IBitFieldType_S];
     uint8 d = fields[IBitFieldType_D];
@@ -158,14 +159,16 @@ Instruction decoder_decode_instruction(Byte* read_ptr, uint32 remaining_size)
 
     if (has_field_flags & (1 << IBitFieldType_REG))
     {
-        *reg_operand = (InstructionOperand){ .operand_type = InstructionOperandType_Register, .register_access = register_lookup[fields[IBitFieldType_REG]][w] };
+        reg_operand->register_access = register_lookup[reg][w];
+        reg_operand->operand_type = reg_operand->register_access.reg_index == RegisterIndex_a ? InstructionOperandType_Accumulator : InstructionOperandType_Register;
     }
 
     if (has_field_flags & (1 << IBitFieldType_MOD))
     {
         if (mod == 0b11)
         {
-            *mod_operand = (InstructionOperand){ .operand_type = InstructionOperandType_Register, .register_access = register_lookup[rm][w] };
+            mod_operand->register_access = register_lookup[rm][w];
+            mod_operand->operand_type = mod_operand->register_access.reg_index == RegisterIndex_a ? InstructionOperandType_Accumulator : InstructionOperandType_Register;
         }
         else
         {
@@ -264,6 +267,7 @@ void decoder_init()
             uint8 first_byte = min_first_byte | (variable_fields_value << variable_first_byte_fields_shift);
             instruction_layout_lookup[first_byte].use_first_index = !use_secondary_lookup;
             assert(sec_lookup_index < 8);
+            assert(instruction_layout_lookup[first_byte].layout_indices[sec_lookup_index] == invalid_instruction_layout_id);
             instruction_layout_lookup[first_byte].layout_indices[sec_lookup_index] = layout_i;
         }
     }

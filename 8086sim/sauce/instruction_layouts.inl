@@ -62,7 +62,10 @@ inst_layout_alt(add, F_HasData | F_DataWideIfW, {B(100000), S, W, MOD, B(000), R
 inst_layout_alt(add, F_HasData | F_DataWideIfW, {B(0000010), W, ImpREG(0b000), ImpD(1)})
 
 //inst_layout(adc)
-//inst_layout(inc)
+
+inst_layout(inc, 0, {B(1111111), W, MOD, B(000), RM, ImpD(1)})
+inst_layout_alt(inc, 0, {B(01000), REG, ImpW(1), ImpD(1)})
+
 //inst_layout(aaa)
 //inst_layout(daa)
 
@@ -72,6 +75,10 @@ inst_layout_alt(sub, F_HasData | F_DataWideIfW, {B(0010110), W, ImpREG(0b000), I
 
 //inst_layout(sbb)
 //inst_layout(dec)
+
+inst_layout(dec, 0, {B(1111111), W, MOD, B(001), RM, ImpD(1)})
+inst_layout_alt(dec, 0, {B(01001), REG, ImpW(1), ImpD(1)})
+
 //inst_layout(neg)
 
 inst_layout(cmp, 0, {B(001110), D, W, MOD, REG, RM})
@@ -90,16 +97,23 @@ inst_layout_alt(cmp, F_HasData | F_DataWideIfW, {B(0011110), W, ImpREG(0b000), I
 //inst_layout(cwd)
 //inst_layout(not)
 //inst_layout(shl)
-//inst_layout(shr)
+inst_layout(shr, 0, {B(110100), V, W, MOD, B(101), RM})
 //inst_layout(sar)
 //inst_layout(rol)
 //inst_layout(ror)
 //inst_layout(rcl)
 //inst_layout(rcr)
 //inst_layout(and)
-//inst_layout(test)
+
+inst_layout(test, 0, {B(1000010), W, MOD, REG, RM})
+inst_layout_alt(test, F_HasData | F_DataWideIfW, {B(1111011), W, MOD, B(000), RM, ImpD(0)})
+inst_layout_alt(test, F_HasData | F_DataWideIfW, {B(1010100), W, ImpREG(0b000), ImpD(1)})
+
 //inst_layout(or)
-//inst_layout(xor)
+
+inst_layout(xor, 0, {B(001100), D, W, MOD, REG, RM})
+inst_layout_alt(xor, F_HasData | F_DataWideIfW, {B(1000000), W, MOD, B(110), RM, ImpD(0)})
+inst_layout_alt(xor, F_HasData | F_DataWideIfW, {B(0011010), W, ImpREG(0b000), ImpD(1)})
 
 inst_layout(rep, 0, {B(1111001), Z})
 //inst_layout(movs)
@@ -109,7 +123,11 @@ inst_layout(rep, 0, {B(1111001), Z})
 //inst_layout(stos)
 //inst_layout(call)
 //inst_layout(jmp)
-//inst_layout(ret)
+
+inst_layout(ret, 0, {B(11000011)})
+inst_layout_alt(ret, F_HasData | F_DataWideIfW, {B(11000010), ImpW(1)})
+inst_layout(retf, 0, {B(11001011)})
+inst_layout_alt(retf, F_HasData | F_DataWideIfW, {B(11001010), ImpW(1)})
 
 inst_layout(jz, F_RelativeJumpDisp, {B(01110100)})
 inst_layout(jl, F_RelativeJumpDisp, {B(01111100)})

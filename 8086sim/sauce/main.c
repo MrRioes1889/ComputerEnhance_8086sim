@@ -6,7 +6,7 @@ int main(int argc, char** argv)
 {
 	const char* bin_filepath = 0;
 	if (argc < 2)
-		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0057_challenge_cycles";
+		bin_filepath = "D:/dev/ComputerEnhance_8086sim/asm/listing_0064_TreeScalarPtr";
 	else
 		bin_filepath = argv[1];
 
@@ -33,6 +33,11 @@ int main(int argc, char** argv)
 		if (inst.op_type == OpType_none)
 		{
 			print_out("Error: failed to read next instruction at offset %u.\n", read_offset);
+			break;
+		}
+		else if (inst.op_type == OpType_ret)
+		{
+			print_out("Stopped on return at address %hu.\n", read_offset);
 			break;
 		}
 

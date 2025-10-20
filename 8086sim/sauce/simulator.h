@@ -64,6 +64,7 @@ enum
 {
     InstructionOperandType_None,
     InstructionOperandType_Register,
+    InstructionOperandType_Accumulator,
     InstructionOperandType_Memory,
     InstructionOperandType_Immediate,
     InstructionOperandType_RelativeImmediate,
